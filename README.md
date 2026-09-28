@@ -4,35 +4,37 @@ Baixador universal de vídeo e áudio para Windows, com interface gráfica e sup
 
 > Use apenas para conteúdo que você tem autorização para baixar e respeite os termos/direitos aplicáveis de cada serviço.
 
-- MP4 compatível: opção padrão para priorizar H.264/AVC + AAC e evitar arquivos AV1 incompatíveis com alguns players do Windows.
-
 ## Recursos
 
 - URLs individuais ou várias URLs em fila.
 - Vídeo: Melhor, 2160p, 1440p, 1080p, 720p, 480p e 360p.
 - Contêiner de vídeo: MP4, MKV e WebM.
+- MP4 compatível: H.264/AVC + AAC por padrão.
 - Áudio: MP3, M4A, AAC, FLAC, WAV e Opus.
 - Pastas separadas para **Vídeos** e **Áudios**.
-- Opção **Organizar por canal/criador** ativável/desativável.
+- Opção **Organizar por canal/criador**.
+- Nome dos vídeos inclui a qualidade real, por exemplo: `Título [id] [1080p].mp4`.
+- Política configurável quando um arquivo já existe: **Manter existente**, **Substituir** ou **Manter os dois**.
+- Em **Manter os dois**, o Plutao acrescenta um identificador de data/hora ao novo arquivo para nunca sobrescrever o anterior.
+- **Evitar repetir o mesmo link (histórico)** é uma opção separada e vem desativada por padrão. Quando ligada, o mesmo ID pode ser ignorado mesmo se você mudar qualidade ou formato.
+- Botões **Abrir arquivo** e **Abrir pasta** para o último download concluído.
 - Playlists, canais e perfis quando habilitado e suportado pelo yt-dlp.
 - Cookies do Edge, Chrome ou Firefox para conteúdo que exija sua própria sessão.
 - Miniatura, metadados e JSON opcionais.
-- Histórico para evitar downloads repetidos.
 - Atualização automática/manual de yt-dlp, FFmpeg e Deno.
 - Barra de progresso com porcentagem, velocidade, ETA, item atual e etapa.
 - Tema preto.
 
-## Organização dos arquivos
+## Arquivos existentes
 
-Com **Organizar por canal/criador** desativado:
+- **Manter existente**: se já existir exatamente aquele arquivo/qualidade, o yt-dlp não baixa novamente.
+- **Substituir**: força o download e sobrescreve o arquivo com o mesmo nome.
+- **Manter os dois (novo nome)**: preserva o anterior e salva o novo com um sufixo de data/hora.
 
-`Videos/Nome do vídeo [id].mp4`
+Arquivos em qualidades diferentes possuem nomes diferentes, por exemplo:
 
-Com a opção ativada:
-
-`Videos/Nome do criador/Nome do vídeo [id].mp4`
-
-O mesmo comportamento vale para a pasta de áudios.
+- `Vídeo [abc123] [1080p].mp4`
+- `Vídeo [abc123] [720p].mp4`
 
 ## Como compilar
 
@@ -43,7 +45,3 @@ Execute `build-release.bat`. O resultado ficará em:
 `release/Plutao.exe`
 
 A publicação é `win-x64`, self-contained e single-file.
-
-## v0.2.2
-
-A preparação inicial também possui progresso para yt-dlp, FFmpeg e Deno, sem o limite de 100 segundos que podia cancelar o FFmpeg em conexões mais lentas.

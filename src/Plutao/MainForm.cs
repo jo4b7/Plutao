@@ -15,6 +15,7 @@ public sealed class MainForm : Form
     private readonly ComboBox cmbVideoFormat = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox cmbAudioFormat = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox cmbCookies = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly ComboBox cmbExisting = new() { DropDownStyle = ComboBoxStyle.DropDownList };
 
     private readonly TextBox txtVideoOutput = new();
     private readonly TextBox txtAudioOutput = new();
@@ -25,7 +26,7 @@ public sealed class MainForm : Form
     private readonly CheckBox chkMetadata = new() { Text = "Incorporar metadados", Checked = true, AutoSize = true };
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
     private readonly CheckBox chkJson = new() { Text = "Salvar info JSON", AutoSize = true };
-    private readonly CheckBox chkArchive = new() { Text = "Evitar downloads repetidos", Checked = true, AutoSize = true };
+    private readonly CheckBox chkArchive = new() { Text = "Evitar repetir o mesmo link (histórico)", Checked = false, AutoSize = true };
     private readonly CheckBox chkCompatibleMp4 = new() { Text = "MP4 compatível (H.264/AAC)", Checked = true, AutoSize = true };
 
     private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 44 };
@@ -38,6 +39,8 @@ public sealed class MainForm : Form
     private readonly Button btnBrowseTemp = new() { Text = "Procurar" };
     private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
     private readonly Button btnClearLog = new() { Text = "Limpar log" };
+    private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
+    private readonly Button btnOpenLastFolder = new() { Text = "ABRIR PASTA", Height = 44, Enabled = false };
 
     private readonly DarkProgressBar progress = new() { Dock = DockStyle.Fill };
     private readonly TextBox txtLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false };
@@ -139,7 +142,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 4,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(10)
         };
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -163,6 +166,12 @@ public sealed class MainForm : Form
         opts.Controls.Add(chkPlaylist, 2, 3);
         opts.SetColumnSpan(chkPlaylist, 2);
 
+        opts.Controls.Add(LabelFor("Se já existir:"), 0, 4);
+        cmbExisting.Dock = DockStyle.Left;
+        cmbExisting.Width = 220;
+        opts.Controls.Add(cmbExisting, 1, 4);
+        opts.SetColumnSpan(cmbExisting, 3);
+
         var checks = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -177,7 +186,7 @@ public sealed class MainForm : Form
         checks.Controls.Add(chkJson);
         checks.Controls.Add(chkArchive);
         checks.Controls.Add(chkCompatibleMp4);
-        opts.Controls.Add(checks, 0, 4);
+        opts.Controls.Add(checks, 0, 5);
         opts.SetColumnSpan(checks, 4);
 
         optsBox.Controls.Add(opts);
@@ -216,13 +225,19 @@ public sealed class MainForm : Form
         progressBox.Controls.Add(progressLayout);
         root.Controls.Add(progressBox);
 
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(0, 8, 0, 8) };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(0, 8, 0, 8) };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
         btnDownload.Dock = DockStyle.Fill;
         btnStop.Dock = DockStyle.Fill;
+        btnOpenLastFile.Dock = DockStyle.Fill;
+        btnOpenLastFolder.Dock = DockStyle.Fill;
         actions.Controls.Add(btnDownload, 0, 0);
         actions.Controls.Add(btnStop, 1, 0);
+        actions.Controls.Add(btnOpenLastFile, 2, 0);
+        actions.Controls.Add(btnOpenLastFolder, 3, 0);
         root.Controls.Add(actions);
 
         var logBox = CreateGroup("Log", fill: true);
@@ -256,6 +271,9 @@ public sealed class MainForm : Form
         cmbCookies.Items.AddRange(new object[] { "Nenhum", "Edge", "Chrome", "Firefox" });
         cmbCookies.SelectedIndex = 0;
 
+        cmbExisting.Items.AddRange(new object[] { "Manter existente", "Substituir", "Manter os dois (novo nome)" });
+        cmbExisting.SelectedIndex = 2;
+
         var downloads = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var plutaoRoot = Path.Combine(downloads, "Downloads", "Plutao");
         txtVideoOutput.Text = Path.Combine(plutaoRoot, "Videos");
@@ -263,6 +281,7 @@ public sealed class MainForm : Form
         txtTemp.Text = _tools.TemporaryDirectory;
 
         chkOrganize.Checked = false;
+        chkArchive.Checked = false;
         chkCompatibleMp4.Checked = true;
         progress.Value = 0;
         progress.DisplayText = "0%";
@@ -286,6 +305,8 @@ public sealed class MainForm : Form
         btnStop.Click += (_, _) => StopDownload();
         btnUpdate.Click += async (_, _) => await RunToolActionAsync();
         btnClearLog.Click += (_, _) => txtLog.Clear();
+        btnOpenLastFile.Click += (_, _) => OpenLastFile();
+        btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
         FormClosing += (_, _) => StopDownload();
     }
 
@@ -364,7 +385,8 @@ public sealed class MainForm : Form
             SaveInfoJson = chkJson.Checked,
             UseArchive = chkArchive.Checked,
             OrganizeByCreator = chkOrganize.Checked,
-            PreferCompatibleMp4 = chkCompatibleMp4.Checked
+            PreferCompatibleMp4 = chkCompatibleMp4.Checked,
+            ExistingFileBehavior = SelectedExistingFileBehavior()
         };
 
         _tools.TemporaryDirectory = options.TemporaryDirectory;
@@ -374,6 +396,9 @@ public sealed class MainForm : Form
         AppendLog($"Iniciando {urls.Count} link(s)...");
         AppendLog($"Destino: {options.OutputDirectory}");
         AppendLog($"Organização por canal/criador: {(options.OrganizeByCreator ? "ativada" : "desativada")}");
+        AppendLog($"Arquivo existente: {ExistingBehaviorLabel(options.ExistingFileBehavior)}");
+        if (options.UseArchive)
+            AppendLog("Histórico anti-repetição: ativado (o mesmo ID pode ser ignorado mesmo ao mudar qualidade/formato).");
         if (options.Mode == DownloadMode.Video && string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase))
             AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "H.264/AAC" : "melhor codec disponível")}");
 
@@ -395,6 +420,8 @@ public sealed class MainForm : Form
                 progress.Invalidate();
                 lblCurrent.Text = "Download concluído.";
                 AppendLog("Fila concluída com sucesso.");
+                if (!string.IsNullOrWhiteSpace(_runner.LastCompletedFilePath))
+                    AppendLog($"Último arquivo: {_runner.LastCompletedFilePath}");
             }
             else
             {
@@ -424,6 +451,60 @@ public sealed class MainForm : Form
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
+        }
+    }
+
+    private ExistingFileBehavior SelectedExistingFileBehavior()
+        => cmbExisting.SelectedIndex switch
+        {
+            0 => ExistingFileBehavior.KeepExisting,
+            1 => ExistingFileBehavior.Replace,
+            _ => ExistingFileBehavior.KeepBoth
+        };
+
+    private static string ExistingBehaviorLabel(ExistingFileBehavior behavior)
+        => behavior switch
+        {
+            ExistingFileBehavior.KeepExisting => "manter existente",
+            ExistingFileBehavior.Replace => "substituir",
+            _ => "manter os dois"
+        };
+
+    private void OpenLastFile()
+    {
+        var path = _runner.LastCompletedFilePath;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            MessageBox.Show(this, "O último arquivo concluído não foi encontrado.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void OpenLastFileFolder()
+    {
+        var path = _runner.LastCompletedFilePath;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            MessageBox.Show(this, "O último arquivo concluído não foi encontrado.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -523,6 +604,9 @@ public sealed class MainForm : Form
         btnBrowseVideo.Enabled = !busy;
         btnBrowseAudio.Enabled = !busy;
         btnBrowseTemp.Enabled = !busy;
+        var hasLastFile = !string.IsNullOrWhiteSpace(_runner.LastCompletedFilePath) && File.Exists(_runner.LastCompletedFilePath);
+        btnOpenLastFile.Enabled = !busy && hasLastFile;
+        btnOpenLastFolder.Enabled = !busy && hasLastFile;
     }
 
     private static GroupBox CreateGroup(string title, bool fill = false)

@@ -13,6 +13,12 @@ public sealed class YtDlpRunner
     private const string ProgressPrefix = "PLUTAO_PROGRESS|";
     private static readonly Regex PercentRegex = new(@"(?<p>\d{1,3}(?:[\.,]\d+)?)%", RegexOptions.Compiled);
     private static readonly Regex AnsiRegex = new(@"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", RegexOptions.Compiled);
+    private static readonly string[] MediaExtensions =
+    {
+        ".mp4", ".mkv", ".webm", ".mp3", ".m4a", ".aac", ".flac", ".wav", ".opus"
+    };
+
+    public string? LastCompletedFilePath { get; private set; }
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
 
@@ -33,6 +39,7 @@ public sealed class YtDlpRunner
         IProgress<DownloadProgressInfo> progress,
         CancellationToken ct)
     {
+        LastCompletedFilePath = null;
         _tools.TemporaryDirectory = options.TemporaryDirectory;
         Directory.CreateDirectory(options.OutputDirectory);
         Directory.CreateDirectory(options.TemporaryDirectory);
@@ -70,7 +77,13 @@ public sealed class YtDlpRunner
         IProgress<DownloadProgressInfo> progress,
         CancellationToken ct)
     {
-        var args = BuildArguments(url, options);
+        // No modo "Manter os dois", um sufixo curto evita colisão mesmo ao
+        // baixar novamente o mesmo link e a mesma qualidade.
+        var uniqueSuffix = options.ExistingFileBehavior == ExistingFileBehavior.KeepBoth
+            ? $" [{DateTime.Now:yyyyMMdd-HHmmssfff}]"
+            : string.Empty;
+
+        var args = BuildArguments(url, options, uniqueSuffix);
         var psi = new ProcessStartInfo
         {
             FileName = _tools.YtDlpPath,
@@ -105,7 +118,7 @@ public sealed class YtDlpRunner
         return _process.ExitCode;
     }
 
-    private static void HandleLine(
+    private void HandleLine(
         string? rawLine,
         int itemIndex,
         int itemCount,
@@ -128,6 +141,7 @@ public sealed class YtDlpRunner
             return;
         }
 
+        TryCaptureCompletedFile(line);
         log.Report(line);
 
         var match = PercentRegex.Match(line);
@@ -157,7 +171,39 @@ public sealed class YtDlpRunner
         }
     }
 
-    private IEnumerable<string> BuildArguments(string url, DownloadOptions o)
+    private void TryCaptureCompletedFile(string line)
+    {
+        string? candidate = null;
+
+        const string movePrefix = "[MoveFiles] Moving file \"";
+        if (line.StartsWith(movePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var marker = "\" to \"";
+            var markerIndex = line.LastIndexOf(marker, StringComparison.Ordinal);
+            if (markerIndex >= 0 && line.EndsWith('"'))
+                candidate = line[(markerIndex + marker.Length)..^1];
+        }
+        else
+        {
+            const string already = " has already been downloaded";
+            if (line.StartsWith("[download] ", StringComparison.OrdinalIgnoreCase) &&
+                line.EndsWith(already, StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = line["[download] ".Length..^already.Length].Trim().Trim('"');
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate) && IsMediaFile(candidate))
+            LastCompletedFilePath = candidate;
+    }
+
+    private static bool IsMediaFile(string path)
+    {
+        var ext = Path.GetExtension(path);
+        return MediaExtensions.Any(x => x.Equals(ext, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private IEnumerable<string> BuildArguments(string url, DownloadOptions o, string uniqueSuffix)
     {
         var args = new List<string>
         {
@@ -171,7 +217,7 @@ public sealed class YtDlpRunner
             "--progress-template", "download:PLUTAO_PROGRESS|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.title)s",
             "-P", o.OutputDirectory,
             "-P", $"temp:{o.TemporaryDirectory}",
-            "-o", OutputTemplate(o.OrganizeByCreator)
+            "-o", OutputTemplate(o, uniqueSuffix)
         };
 
         if (!o.AllowPlaylists)
@@ -195,6 +241,9 @@ public sealed class YtDlpRunner
             args.Add("--download-archive");
             args.Add(Path.Combine(o.OutputDirectory, "plutao-archive.txt"));
         }
+
+        if (o.ExistingFileBehavior == ExistingFileBehavior.Replace)
+            args.Add("--force-overwrites");
 
         if (!string.Equals(o.BrowserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
         {
@@ -229,10 +278,16 @@ public sealed class YtDlpRunner
         return args;
     }
 
-    private static string OutputTemplate(bool organizeByCreator)
-        => organizeByCreator
-            ? "%(uploader)s/%(title)s [%(id)s].%(ext)s"
-            : "%(title)s [%(id)s].%(ext)s";
+    private static string OutputTemplate(DownloadOptions o, string uniqueSuffix)
+    {
+        var file = o.Mode == DownloadMode.Video
+            ? $"%(title)s [%(id)s] [%(height)sp]{uniqueSuffix}.%(ext)s"
+            : $"%(title)s [%(id)s]{uniqueSuffix}.%(ext)s";
+
+        return o.OrganizeByCreator
+            ? $"%(uploader)s/{file}"
+            : file;
+    }
 
     private static string VideoSelector(string quality, string container, bool preferCompatibleMp4)
     {
@@ -250,9 +305,6 @@ public sealed class YtDlpRunner
         {
             if (preferCompatibleMp4)
             {
-                // Prioriza H.264/AVC + AAC/M4A para máxima compatibilidade com
-                // Windows, TVs, celulares e editores. Não cai silenciosamente
-                // para AV1/VP9 quando esta opção está ativa.
                 return $"bv[vcodec^=avc1]{limit}+ba[acodec^=mp4a]/b[vcodec^=avc1]{limit}";
             }
 
@@ -283,8 +335,7 @@ public sealed class YtDlpRunner
     private static string CleanMetric(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
-        var result = text.Replace("N/A", "", StringComparison.OrdinalIgnoreCase).Trim();
-        return result;
+        return text.Replace("N/A", "", StringComparison.OrdinalIgnoreCase).Trim();
     }
 
     private static void ReportFriendlyHint(string url, DownloadOptions options, IProgress<string> log)
