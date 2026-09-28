@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Tela de análise agora mostra um cabeçalho do perfil com foto, nome, @usuário e plataforma.
+- Exibe seguidores, seguindo, publicações, quantidade de vídeos encontrada e indicadores de conta pública/privada/verificada quando a plataforma fornece esses dados.
+- Biografia do perfil é exibida quando disponível.
+- Lista de seleção ganhou miniaturas dos vídeos, data e informações adicionais como curtidas, visualizações e resolução quando disponíveis.
+- Instagram usa os metadados do gallery-dl para foto do perfil e miniaturas dos Reels/posts.
+- YouTube/TikTok e outras coleções aproveitam os metadados disponibilizados pelo yt-dlp.
+- Falha ao carregar uma miniatura não bloqueia análise nem download.
+- Botão para abrir o perfil original diretamente da tela de seleção.
+
 ## 0.3.5
 
 - Interface ganhou mais espaço vertical em monitores grandes sem voltar a ficar poluída.

@@ -44,7 +44,7 @@ public sealed class MainForm : Form
     private readonly Button btnToggleLog = new() { Text = "MOSTRAR LOG", AutoSize = true };
     private readonly GroupBox grpAdvanced = new();
     private readonly GroupBox grpLog = new();
-    private readonly Button btnAnalyzeCollection = new() { Text = "ANALISAR CONTA/PÁGINA", AutoSize = true };
+    private readonly Button btnAnalyzeCollection = new() { Text = "VER / ANALISAR PERFIL", AutoSize = true };
     private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
     private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
     private readonly Button btnOpenLastFolder = new() { Text = "ABRIR PASTA", Height = 44, Enabled = false };
@@ -613,7 +613,7 @@ public sealed class MainForm : Form
                 return;
             }
 
-            using var picker = new CollectionPickerForm(items);
+            using var picker = new CollectionPickerForm(items, _runner.LastAnalyzedProfile);
             if (picker.ShowDialog(this) == DialogResult.OK)
             {
                 var selectedItems = picker.SelectedItems.OrderBy(x => x.Index).ToArray();

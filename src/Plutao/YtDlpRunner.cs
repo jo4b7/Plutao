@@ -22,6 +22,7 @@ public sealed class YtDlpRunner
 
     private string? _currentCompletedFilePath;
     public string? LastCompletedFilePath { get; private set; }
+    public ProfileInfo? LastAnalyzedProfile { get; private set; }
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
 
@@ -80,6 +81,7 @@ public sealed class YtDlpRunner
         CancellationToken ct)
     {
         url = url.Trim();
+        LastAnalyzedProfile = null;
         if (string.IsNullOrWhiteSpace(url))
             throw new ArgumentException("Informe o link da página/conta/canal/perfil.", nameof(url));
 
@@ -203,15 +205,29 @@ public sealed class YtDlpRunner
                                 ?? ReadString(entry, "description")
                                 ?? (!string.IsNullOrWhiteSpace(id) ? id : $"Mídia {index}");
                     var duration = ReadDouble(entry, "duration");
-                    items.Add(new CollectionMediaItem(index, id, CleanDisplayTitle(title), FormatDuration(duration)));
+                    var thumbnail = ReadThumbnailUrl(entry);
+                    var date = ReadMediaDate(entry);
+                    var details = FormatMediaDetails(entry);
+                    var itemUrl = ReadString(entry, "webpage_url") ?? ReadString(entry, "url") ?? string.Empty;
+                    items.Add(new CollectionMediaItem(index, id, CleanDisplayTitle(title), FormatDuration(duration), itemUrl, thumbnail, date, details));
                 }
             }
             else
             {
                 var id = ReadString(root, "id") ?? string.Empty;
                 var title = ReadString(root, "title") ?? (!string.IsNullOrWhiteSpace(id) ? id : "Mídia 1");
-                items.Add(new CollectionMediaItem(1, id, CleanDisplayTitle(title), FormatDuration(ReadDouble(root, "duration"))));
+                items.Add(new CollectionMediaItem(
+                    1,
+                    id,
+                    CleanDisplayTitle(title),
+                    FormatDuration(ReadDouble(root, "duration")),
+                    ReadString(root, "webpage_url") ?? ReadString(root, "url") ?? string.Empty,
+                    ReadThumbnailUrl(root),
+                    ReadMediaDate(root),
+                    FormatMediaDetails(root)));
             }
+
+            LastAnalyzedProfile = BuildProfileInfoFromYtDlp(root, url, items.Count);
         }
         catch (JsonException ex)
         {
@@ -237,6 +253,19 @@ public sealed class YtDlpRunner
         await _tools.EnsureGalleryDlAsync(log, progress, ct);
 
         var profileBase = NormalizeInstagramProfileUrl(url);
+
+        progress.Report(new DownloadProgressInfo(0, 0, 8, "", "", "", "Lendo informações do perfil"));
+        log.Report("[Análise/Instagram] Lendo informações gerais do perfil...");
+        try
+        {
+            var profileJson = await RunGalleryDlAnalysisAsync(profileBase + "info/", browserCookies, 0, log, ct);
+            LastAnalyzedProfile = ParseInstagramProfileInfo(profileJson, profileBase);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.Report("[Análise/Instagram] Informações gerais indisponíveis; continuando com os vídeos.");
+        }
+
         var targets = new[]
         {
             (Label: "Reels", Url: profileBase + "reels/"),
@@ -281,6 +310,11 @@ public sealed class YtDlpRunner
             .Take(limit > 0 ? limit : int.MaxValue)
             .Select((item, index) => item with { Index = index + 1 })
             .ToArray();
+
+        LastAnalyzedProfile = (LastAnalyzedProfile ?? BuildInstagramFallbackProfile(profileBase)) with
+        {
+            FoundVideos = indexed.Length
+        };
 
         progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{indexed.Length} vídeo(s) encontrado(s)"));
         log.Report($"[Análise/Instagram] Encontrados {indexed.Length} vídeo(s) únicos.");
@@ -410,7 +444,18 @@ public sealed class YtDlpRunner
                     ? CleanDisplayTitle(description)
                     : !string.IsNullOrWhiteSpace(shortcode) ? $"Instagram {shortcode}" : "Vídeo do Instagram";
 
-                items.Add(new CollectionMediaItem(items.Count + 1, shortcode, title, "", postUrl));
+                var thumbnail = ReadString(metadata, "display_url") ?? string.Empty;
+                var date = ReadMediaDate(metadata);
+                var details = FormatInstagramMediaDetails(metadata);
+                items.Add(new CollectionMediaItem(
+                    items.Count + 1,
+                    shortcode,
+                    title,
+                    "",
+                    postUrl,
+                    thumbnail,
+                    date,
+                    details));
             }
         }
         catch (JsonException)
@@ -474,6 +519,265 @@ public sealed class YtDlpRunner
         if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)) return number;
         if (value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number)) return number;
         return null;
+    }
+
+    private static ProfileInfo? ParseInstagramProfileInfo(string stdout, string profileUrl)
+    {
+        if (string.IsNullOrWhiteSpace(stdout))
+            return BuildInstagramFallbackProfile(profileUrl);
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return BuildInstagramFallbackProfile(profileUrl);
+
+            foreach (var message in document.RootElement.EnumerateArray())
+            {
+                if (message.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                JsonElement? metadata = null;
+                foreach (var part in message.EnumerateArray())
+                {
+                    if (part.ValueKind == JsonValueKind.Object)
+                        metadata = part;
+                }
+
+                if (!metadata.HasValue)
+                    continue;
+
+                var user = metadata.Value;
+                var username = ReadString(user, "username") ?? ExtractInstagramUsername(profileUrl);
+                if (string.IsNullOrWhiteSpace(username))
+                    continue;
+
+                var displayName = ReadString(user, "full_name")
+                                  ?? ReadString(user, "fullname")
+                                  ?? username;
+                var biography = ReadString(user, "biography") ?? string.Empty;
+                var avatar = ReadString(user, "profile_pic_url_hd")
+                             ?? ReadNestedString(user, "hd_profile_pic_url_info", "url")
+                             ?? ReadLastArrayObjectString(user, "hd_profile_pic_versions", "url")
+                             ?? ReadString(user, "profile_pic_url")
+                             ?? string.Empty;
+
+                var followers = ReadLong(user, "follower_count")
+                                ?? ReadLong(user, "count_followed")
+                                ?? ReadNestedLong(user, "edge_followed_by", "count");
+                var following = ReadLong(user, "following_count")
+                                ?? ReadLong(user, "count_follow")
+                                ?? ReadNestedLong(user, "edge_follow", "count");
+                var posts = ReadLong(user, "media_count")
+                            ?? ReadLong(user, "count_media")
+                            ?? ReadNestedLong(user, "edge_owner_to_timeline_media", "count");
+
+                return new ProfileInfo(
+                    "Instagram",
+                    username,
+                    displayName,
+                    biography,
+                    avatar,
+                    followers,
+                    following,
+                    posts,
+                    ReadBool(user, "is_verified"),
+                    ReadBool(user, "is_private"),
+                    profileUrl);
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return BuildInstagramFallbackProfile(profileUrl);
+    }
+
+    private static ProfileInfo BuildInstagramFallbackProfile(string profileUrl)
+    {
+        var username = ExtractInstagramUsername(profileUrl);
+        return new ProfileInfo(
+            "Instagram",
+            username,
+            username,
+            string.Empty,
+            string.Empty,
+            ExternalUrl: profileUrl);
+    }
+
+    private static string ExtractInstagramUsername(string profileUrl)
+    {
+        if (!Uri.TryCreate(profileUrl, UriKind.Absolute, out var uri))
+            return string.Empty;
+        return uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+    }
+
+    private static ProfileInfo? BuildProfileInfoFromYtDlp(JsonElement root, string url, int foundVideos)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var platform = PlatformName(url);
+        var username = ReadString(root, "uploader")
+                       ?? ReadString(root, "channel")
+                       ?? ReadString(root, "playlist_uploader")
+                       ?? ReadString(root, "uploader_id")
+                       ?? string.Empty;
+        var displayName = ReadString(root, "channel")
+                          ?? ReadString(root, "uploader")
+                          ?? ReadString(root, "playlist_title")
+                          ?? ReadString(root, "title")
+                          ?? username;
+        var biography = ReadString(root, "description") ?? string.Empty;
+        var avatar = ReadThumbnailUrl(root);
+        var followers = ReadLong(root, "channel_follower_count") ?? ReadLong(root, "follower_count");
+        var posts = ReadLong(root, "playlist_count");
+
+        if (string.IsNullOrWhiteSpace(username) && string.IsNullOrWhiteSpace(displayName) && string.IsNullOrWhiteSpace(avatar))
+            return null;
+
+        return new ProfileInfo(
+            platform,
+            username,
+            displayName,
+            biography,
+            avatar,
+            followers,
+            null,
+            posts,
+            null,
+            null,
+            url)
+        {
+            FoundVideos = foundVideos
+        };
+    }
+
+    private static string PlatformName(string url)
+    {
+        if (url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase)) return "Instagram";
+        if (url.Contains("tiktok.com", StringComparison.OrdinalIgnoreCase)) return "TikTok";
+        if (url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase)) return "YouTube";
+        return "Perfil/Página";
+    }
+
+    private static string ReadThumbnailUrl(JsonElement element)
+    {
+        var direct = ReadString(element, "thumbnail");
+        if (!string.IsNullOrWhiteSpace(direct))
+            return direct;
+
+        if (element.ValueKind == JsonValueKind.Object &&
+            element.TryGetProperty("thumbnails", out var thumbnails) &&
+            thumbnails.ValueKind == JsonValueKind.Array)
+        {
+            string result = string.Empty;
+            foreach (var thumb in thumbnails.EnumerateArray())
+            {
+                if (thumb.ValueKind != JsonValueKind.Object) continue;
+                var value = ReadString(thumb, "url");
+                if (!string.IsNullOrWhiteSpace(value)) result = value;
+            }
+            return result;
+        }
+
+        return string.Empty;
+    }
+
+    private static string ReadMediaDate(JsonElement element)
+    {
+        foreach (var key in new[] { "upload_date", "release_date", "post_date", "date", "timestamp" })
+        {
+            if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(key, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var unix) && unix > 1_000_000_000)
+            {
+                try { return DateTimeOffset.FromUnixTimeSeconds(unix).ToLocalTime().ToString("dd/MM/yyyy"); }
+                catch { }
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString();
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                if (text.Length == 8 && DateTime.TryParseExact(text, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var compact))
+                    return compact.ToString("dd/MM/yyyy");
+                if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var parsed))
+                    return parsed.ToString("dd/MM/yyyy");
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string FormatMediaDetails(JsonElement element)
+    {
+        var details = new List<string>();
+        var views = ReadLong(element, "view_count");
+        var likes = ReadLong(element, "like_count");
+        var width = ReadInt(element, "width");
+        var height = ReadInt(element, "height");
+        if (views.HasValue) details.Add($"{views.Value:N0} visualizações");
+        if (likes.HasValue) details.Add($"{likes.Value:N0} curtidas");
+        if (width.HasValue && height.HasValue) details.Add($"{width}×{height}");
+        return string.Join(" • ", details);
+    }
+
+    private static string FormatInstagramMediaDetails(JsonElement metadata)
+    {
+        var details = new List<string>();
+        var likes = ReadLong(metadata, "likes") ?? ReadLong(metadata, "like_count");
+        var width = ReadInt(metadata, "width_original") ?? ReadInt(metadata, "width");
+        var height = ReadInt(metadata, "height_original") ?? ReadInt(metadata, "height");
+        if (likes.HasValue) details.Add($"{likes.Value:N0} curtidas");
+        if (width.HasValue && height.HasValue && width > 0 && height > 0) details.Add($"{width}×{height}");
+        return string.Join(" • ", details);
+    }
+
+    private static long? ReadLong(JsonElement element, string property)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value)) return null;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number)) return number;
+        if (value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number)) return number;
+        return null;
+    }
+
+    private static bool? ReadBool(JsonElement element, string property)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value)) return null;
+        if (value.ValueKind == JsonValueKind.True) return true;
+        if (value.ValueKind == JsonValueKind.False) return false;
+        if (value.ValueKind == JsonValueKind.String && bool.TryParse(value.GetString(), out var result)) return result;
+        return null;
+    }
+
+    private static long? ReadNestedLong(JsonElement element, string parent, string child)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(parent, out var nested) || nested.ValueKind != JsonValueKind.Object)
+            return null;
+        return ReadLong(nested, child);
+    }
+
+    private static string? ReadNestedString(JsonElement element, string parent, string child)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(parent, out var nested) || nested.ValueKind != JsonValueKind.Object)
+            return null;
+        return ReadString(nested, child);
+    }
+
+    private static string? ReadLastArrayObjectString(JsonElement element, string property, string child)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array)
+            return null;
+        string? result = null;
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            var value = ReadString(item, child);
+            if (!string.IsNullOrWhiteSpace(value)) result = value;
+        }
+        return result;
     }
 
     private static string CleanDisplayTitle(string title)

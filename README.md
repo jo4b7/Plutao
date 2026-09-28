@@ -34,3 +34,17 @@ Na v0.3.5 o espaçamento vertical também se adapta ao monitor: em QHD/2K a inte
 Pastas padrão desta instalação:
 - Vídeos: `E:\[VIDEOS]`
 - Áudios: `E:\[MUSICAS]`
+## Visualização de perfil
+
+Ao usar **VER / ANALISAR PERFIL**, o Plutao abre uma tela de seleção com informações gerais da conta quando disponíveis:
+
+- foto do perfil;
+- nome e @usuário;
+- seguidores, seguindo e quantidade de publicações;
+- número de vídeos encontrados;
+- biografia e indicadores de conta pública/privada/verificada;
+- miniaturas dos vídeos;
+- data, curtidas, visualizações, resolução e duração quando a plataforma fornece esses metadados.
+
+As miniaturas são opcionais: se a CDN da plataforma bloquear uma imagem, a seleção e o download continuam funcionando normalmente.
+
