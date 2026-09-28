@@ -16,12 +16,13 @@ public sealed class MainForm : Form
     private readonly ComboBox cmbAudioFormat = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox cmbCookies = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox cmbExisting = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly ComboBox cmbCollectionLimit = new() { DropDownStyle = ComboBoxStyle.DropDownList };
 
     private readonly TextBox txtVideoOutput = new();
     private readonly TextBox txtAudioOutput = new();
     private readonly TextBox txtTemp = new();
 
-    private readonly CheckBox chkPlaylist = new() { Text = "Permitir playlist/canal/perfil", AutoSize = true };
+    private readonly CheckBox chkPlaylist = new() { Text = "Baixar página/conta/canal/perfil completo", Checked = true, AutoSize = true };
     private readonly CheckBox chkOrganize = new() { Text = "Organizar por canal/criador", AutoSize = true };
     private readonly CheckBox chkMetadata = new() { Text = "Incorporar metadados", Checked = true, AutoSize = true };
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
@@ -39,6 +40,8 @@ public sealed class MainForm : Form
     private readonly Button btnBrowseTemp = new() { Text = "Procurar" };
     private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
     private readonly Button btnClearLog = new() { Text = "Limpar log" };
+    private readonly Button btnAnalyzeCollection = new() { Text = "ANALISAR CONTA/PÁGINA", AutoSize = true };
+    private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
     private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
     private readonly Button btnOpenLastFolder = new() { Text = "ABRIR PASTA", Height = 44, Enabled = false };
 
@@ -46,6 +49,9 @@ public sealed class MainForm : Form
     private readonly TextBox txtLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false };
     private readonly Label lblStatus = new() { Text = "Pronto", AutoSize = true };
     private readonly Label lblCurrent = new() { Text = "Aguardando download", AutoEllipsis = true, Dock = DockStyle.Fill };
+
+    private string? _analyzedCollectionUrl;
+    private string _selectedPlaylistItems = string.Empty;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
     private static readonly Color Panel = Color.FromArgb(18, 18, 18);
@@ -142,7 +148,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 4,
-            RowCount = 6,
+            RowCount = 8,
             Padding = new Padding(10)
         };
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -163,13 +169,41 @@ public sealed class MainForm : Form
         opts.Controls.Add(LabelFor("Cookies:"), 0, 3);
         cmbCookies.Width = 160;
         opts.Controls.Add(cmbCookies, 1, 3);
-        opts.Controls.Add(chkPlaylist, 2, 3);
-        opts.SetColumnSpan(chkPlaylist, 2);
 
-        opts.Controls.Add(LabelFor("Se já existir:"), 0, 4);
+        opts.Controls.Add(LabelFor("Página/conta:"), 0, 4);
+        opts.Controls.Add(chkPlaylist, 1, 4);
+        var collectionLimitPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
+        collectionLimitPanel.Controls.Add(LabelFor("Limite:"));
+        cmbCollectionLimit.Width = 100;
+        collectionLimitPanel.Controls.Add(cmbCollectionLimit);
+        opts.Controls.Add(collectionLimitPanel, 2, 4);
+        opts.SetColumnSpan(collectionLimitPanel, 2);
+
+        opts.Controls.Add(LabelFor("Seleção:"), 0, 5);
+        var collectionSelectPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(0)
+        };
+        collectionSelectPanel.Controls.Add(btnAnalyzeCollection);
+        collectionSelectPanel.Controls.Add(lblCollectionInfo);
+        opts.Controls.Add(collectionSelectPanel, 1, 5);
+        opts.SetColumnSpan(collectionSelectPanel, 3);
+
+        opts.Controls.Add(LabelFor("Se já existir:"), 0, 6);
         cmbExisting.Dock = DockStyle.Left;
         cmbExisting.Width = 220;
-        opts.Controls.Add(cmbExisting, 1, 4);
+        opts.Controls.Add(cmbExisting, 1, 6);
         opts.SetColumnSpan(cmbExisting, 3);
 
         var checks = new FlowLayoutPanel
@@ -186,7 +220,7 @@ public sealed class MainForm : Form
         checks.Controls.Add(chkJson);
         checks.Controls.Add(chkArchive);
         checks.Controls.Add(chkCompatibleMp4);
-        opts.Controls.Add(checks, 0, 5);
+        opts.Controls.Add(checks, 0, 7);
         opts.SetColumnSpan(checks, 4);
 
         optsBox.Controls.Add(opts);
@@ -274,6 +308,9 @@ public sealed class MainForm : Form
         cmbExisting.Items.AddRange(new object[] { "Manter existente", "Substituir", "Manter os dois (novo nome)" });
         cmbExisting.SelectedIndex = 2;
 
+        cmbCollectionLimit.Items.AddRange(new object[] { "Todos", "10", "25", "50", "100", "200" });
+        cmbCollectionLimit.SelectedIndex = 0;
+
         var downloads = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var plutaoRoot = Path.Combine(downloads, "Downloads", "Plutao");
         txtVideoOutput.Text = Path.Combine(plutaoRoot, "Videos");
@@ -281,8 +318,11 @@ public sealed class MainForm : Form
         txtTemp.Text = _tools.TemporaryDirectory;
 
         chkOrganize.Checked = false;
+        chkPlaylist.Checked = true;
         chkArchive.Checked = false;
         chkCompatibleMp4.Checked = true;
+        lblCollectionInfo.Text = "Não analisado";
+        lblCollectionInfo.ForeColor = TextMuted;
         progress.Value = 0;
         progress.DisplayText = "0%";
         UpdateModeUi();
@@ -293,7 +333,16 @@ public sealed class MainForm : Form
         rbVideo.CheckedChanged += (_, _) => UpdateModeUi();
         rbAudio.CheckedChanged += (_, _) => UpdateModeUi();
         cmbVideoFormat.SelectedIndexChanged += (_, _) => UpdateModeUi();
+        chkPlaylist.CheckedChanged += (_, _) =>
+        {
+            UpdateModeUi();
+            if (!chkPlaylist.Checked) ResetCollectionSelection();
+        };
+        cmbCollectionLimit.SelectedIndexChanged += (_, _) => ResetCollectionSelection();
+        cmbCookies.SelectedIndexChanged += (_, _) => ResetCollectionSelection();
+        txtUrls.TextChanged += (_, _) => ResetCollectionSelection();
         btnPaste.Click += (_, _) => { if (Clipboard.ContainsText()) txtUrls.Text = Clipboard.GetText(); };
+        btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync();
 
         btnBrowseVideo.Click += (_, _) => BrowseFolder(txtVideoOutput, "Escolha a pasta dos vídeos");
         btnOpenVideo.Click += (_, _) => OpenFolder(txtVideoOutput.Text);
@@ -316,6 +365,8 @@ public sealed class MainForm : Form
         cmbVideoFormat.Enabled = rbVideo.Checked;
         cmbAudioFormat.Enabled = rbAudio.Checked;
         chkCompatibleMp4.Enabled = rbVideo.Checked && string.Equals(cmbVideoFormat.SelectedItem?.ToString(), "mp4", StringComparison.OrdinalIgnoreCase);
+        cmbCollectionLimit.Enabled = chkPlaylist.Checked;
+        btnAnalyzeCollection.Enabled = chkPlaylist.Checked;
 
         txtVideoOutput.ForeColor = rbVideo.Checked ? TextMain : TextMuted;
         txtAudioOutput.ForeColor = rbAudio.Checked ? TextMain : TextMuted;
@@ -346,6 +397,98 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ResetCollectionSelection()
+    {
+        _analyzedCollectionUrl = null;
+        _selectedPlaylistItems = string.Empty;
+        if (!IsDisposed)
+            lblCollectionInfo.Text = "Não analisado";
+    }
+
+    private async Task AnalyzeCollectionAsync()
+    {
+        var urls = txtUrls.Lines
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct()
+            .ToList();
+
+        if (urls.Count != 1)
+        {
+            MessageBox.Show(this, "Para analisar uma conta/página, deixe exatamente um link na caixa de links.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!chkPlaylist.Checked)
+            chkPlaylist.Checked = true;
+
+        _tools.TemporaryDirectory = txtTemp.Text.Trim();
+        _cts = new CancellationTokenSource();
+        SetBusy(true);
+        lblStatus.Text = "Analisando...";
+        lblStatus.ForeColor = TextMuted;
+        lblCurrent.Text = "Listando vídeos da página/conta...";
+        AppendLog($"[Análise] Iniciando: {urls[0]}");
+
+        try
+        {
+            var items = await _runner.AnalyzeCollectionAsync(
+                urls[0],
+                cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
+                SelectedCollectionLimit(),
+                LogProgress(),
+                new Progress<DownloadProgressInfo>(SetProgressUi),
+                _cts.Token);
+
+            if (items.Count == 0)
+            {
+                lblCollectionInfo.Text = "0 vídeos encontrados";
+                MessageBox.Show(this, "Nenhum vídeo foi encontrado. Confira o log; alguns perfis exigem Cookies do navegador.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using var picker = new CollectionPickerForm(items);
+            if (picker.ShowDialog(this) == DialogResult.OK)
+            {
+                var selected = picker.SelectedIndexes.OrderBy(x => x).ToArray();
+                _analyzedCollectionUrl = urls[0];
+                _selectedPlaylistItems = string.Join(",", selected);
+                lblCollectionInfo.Text = $"{items.Count} encontrados • {selected.Length} selecionados";
+                AppendLog($"[Análise] {items.Count} encontrados; {selected.Length} selecionados para download.");
+            }
+            else
+            {
+                lblCollectionInfo.Text = $"{items.Count} encontrados • seleção cancelada";
+                AppendLog($"[Análise] {items.Count} encontrados; seleção cancelada.");
+            }
+
+            lblStatus.Text = "Análise concluída";
+            lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
+            lblCurrent.Text = $"Encontrados {items.Count} vídeo(s).";
+        }
+        catch (OperationCanceledException)
+        {
+            lblStatus.Text = "Cancelado";
+            lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
+            lblCurrent.Text = "Análise cancelada.";
+            AppendLog("[Análise] Cancelada.");
+        }
+        catch (Exception ex)
+        {
+            lblStatus.Text = "Erro";
+            lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
+            lblCurrent.Text = "Não foi possível listar os vídeos.";
+            AppendLog("[Análise] ERRO: " + ex.Message);
+            MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+            _cts?.Dispose();
+            _cts = null;
         }
     }
 
@@ -380,6 +523,11 @@ public sealed class MainForm : Form
             TemporaryDirectory = txtTemp.Text.Trim(),
             BrowserCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
             AllowPlaylists = chkPlaylist.Checked,
+            CollectionLimit = SelectedCollectionLimit(),
+            SelectedPlaylistItems = chkPlaylist.Checked && urls.Count == 1 &&
+                                    string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal)
+                ? _selectedPlaylistItems
+                : string.Empty,
             EmbedMetadata = chkMetadata.Checked,
             SaveThumbnail = chkThumb.Checked,
             SaveInfoJson = chkJson.Checked,
@@ -396,6 +544,11 @@ public sealed class MainForm : Form
         AppendLog($"Iniciando {urls.Count} link(s)...");
         AppendLog($"Destino: {options.OutputDirectory}");
         AppendLog($"Organização por canal/criador: {(options.OrganizeByCreator ? "ativada" : "desativada")}");
+        AppendLog(options.AllowPlaylists
+            ? $"Página/conta/canal/perfil completo: ativado (limite: {(options.CollectionLimit > 0 ? options.CollectionLimit.ToString() : "todos")})"
+            : "Página/conta/canal/perfil completo: desativado");
+        if (!string.IsNullOrWhiteSpace(options.SelectedPlaylistItems))
+            AppendLog($"Seleção individual ativa: {options.SelectedPlaylistItems.Split(',').Length} item(ns).");
         AppendLog($"Arquivo existente: {ExistingBehaviorLabel(options.ExistingFileBehavior)}");
         if (options.UseArchive)
             AppendLog("Histórico anti-repetição: ativado (o mesmo ID pode ser ignorado mesmo ao mudar qualidade/formato).");
@@ -452,6 +605,13 @@ public sealed class MainForm : Form
             _cts?.Dispose();
             _cts = null;
         }
+    }
+
+    private int SelectedCollectionLimit()
+    {
+        if (!chkPlaylist.Checked) return 0;
+        var text = cmbCollectionLimit.SelectedItem?.ToString();
+        return int.TryParse(text, out var value) ? value : 0;
     }
 
     private ExistingFileBehavior SelectedExistingFileBehavior()
@@ -582,7 +742,11 @@ public sealed class MainForm : Form
 
         var parts = new List<string>();
         if (info.ItemIndex > 0 && info.ItemCount > 0)
-            parts.Add($"Item {info.ItemIndex}/{info.ItemCount}");
+            parts.Add($"Link {info.ItemIndex}/{info.ItemCount}");
+        if (info.CollectionIndex > 0)
+            parts.Add(info.CollectionCount > 0
+                ? $"Mídia {info.CollectionIndex}/{info.CollectionCount}"
+                : $"Mídia {info.CollectionIndex}");
         parts.Add($"{info.Percent:0.0}%");
         if (!string.IsNullOrWhiteSpace(info.Speed)) parts.Add(info.Speed);
         if (!string.IsNullOrWhiteSpace(info.Eta)) parts.Add("ETA " + info.Eta);
@@ -604,6 +768,7 @@ public sealed class MainForm : Form
         btnBrowseVideo.Enabled = !busy;
         btnBrowseAudio.Enabled = !busy;
         btnBrowseTemp.Enabled = !busy;
+        btnAnalyzeCollection.Enabled = !busy && chkPlaylist.Checked;
         var hasLastFile = !string.IsNullOrWhiteSpace(_runner.LastCompletedFilePath) && File.Exists(_runner.LastCompletedFilePath);
         btnOpenLastFile.Enabled = !busy && hasLastFile;
         btnOpenLastFolder.Enabled = !busy && hasLastFile;

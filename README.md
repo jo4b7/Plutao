@@ -1,52 +1,43 @@
 # Plutao
 
-Baixador universal de vídeo e áudio para Windows, com interface gráfica e suporte baseado em **yt-dlp + FFmpeg + Deno**.
+Baixador universal de vídeo e áudio para Windows baseado em **yt-dlp + FFmpeg**.
 
-> Use apenas para conteúdo que você tem autorização para baixar e respeite os termos/direitos aplicáveis de cada serviço.
+## v0.3.1 — analisar conta e selecionar vídeos
 
-## Recursos
+Agora o modo de página/conta/canal/perfil pode ser analisado antes do download.
 
-- URLs individuais ou várias URLs em fila.
+Fluxo:
+
+1. Cole um único link de conta/página/perfil/canal.
+2. Deixe **Baixar página/conta/canal/perfil completo** ativado.
+3. Escolha o limite de análise (Todos, 10, 25, 50, 100 ou 200).
+4. Clique em **ANALISAR CONTA/PÁGINA**.
+5. O Plutao mostra quantos itens encontrou e abre uma lista para marcar/desmarcar individualmente.
+6. Clique em **USAR SELECIONADOS** e depois em **BAIXAR**.
+
+A seleção é aplicada ao link original usando os índices da coleção, então não é necessário transformar a conta em dezenas de links manualmente.
+
+> Algumas plataformas podem listar publicações que não são vídeos ou podem exigir cookies da sua própria sessão. A quantidade mostrada corresponde aos itens que o extrator conseguiu enumerar dentro do limite escolhido.
+
+## Recursos principais
+
+- Links individuais ou múltiplos links em fila.
+- Um link de perfil/conta/canal pode expandir para vários itens.
+- Análise prévia da conta/página com contagem.
+- Seleção individual dos itens antes de baixar.
+- Marcar todos / desmarcar todos.
+- Progresso por mídia dentro de contas/perfis.
 - Vídeo: Melhor, 2160p, 1440p, 1080p, 720p, 480p e 360p.
-- Contêiner de vídeo: MP4, MKV e WebM.
-- MP4 compatível: H.264/AVC + AAC por padrão.
+- MP4 compatível H.264/AAC para YouTube.
+- MP4, MKV e WebM.
 - Áudio: MP3, M4A, AAC, FLAC, WAV e Opus.
-- Pastas separadas para **Vídeos** e **Áudios**.
-- Opção **Organizar por canal/criador**.
-- Nome dos vídeos inclui a qualidade real, por exemplo: `Título [id] [1080p].mp4`.
-- Política configurável quando um arquivo já existe: **Manter existente**, **Substituir** ou **Manter os dois**.
-- Em **Manter os dois**, o Plutao acrescenta um identificador de data/hora ao novo arquivo para nunca sobrescrever o anterior.
-- **Evitar repetir o mesmo link (histórico)** é uma opção separada e vem desativada por padrão. Quando ligada, o mesmo ID pode ser ignorado mesmo se você mudar qualidade ou formato.
-- Botões **Abrir arquivo** e **Abrir pasta** para o último download concluído.
-- Playlists, canais e perfis quando habilitado e suportado pelo yt-dlp.
-- Cookies do Edge, Chrome ou Firefox para conteúdo que exija sua própria sessão.
-- Miniatura, metadados e JSON opcionais.
-- Atualização automática/manual de yt-dlp, FFmpeg e Deno.
-- Barra de progresso com porcentagem, velocidade, ETA, item atual e etapa.
-- Tema preto.
+- Cookies de Edge, Chrome ou Firefox.
+- Organização opcional por canal/criador.
+- Controle de arquivos existentes e histórico anti-repetição.
+- yt-dlp, FFmpeg e Deno gerenciados pelo aplicativo.
+- Botões para abrir o último arquivo e sua pasta.
 
-## Arquivos existentes
+## Compilar
 
-- **Manter existente**: se já existir exatamente aquele arquivo/qualidade, o yt-dlp não baixa novamente.
-- **Substituir**: força o download e sobrescreve o arquivo com o mesmo nome.
-- **Manter os dois (novo nome)**: preserva o anterior e salva o novo com um sufixo de data/hora.
-
-Arquivos em qualidades diferentes possuem nomes diferentes, por exemplo:
-
-- `Vídeo [abc123] [1080p].mp4`
-- `Vídeo [abc123] [720p].mp4`
-
-## Como compilar
-
-Requer Windows 10/11 e .NET 8 SDK x64.
-
-Execute `build-release.bat`. O resultado ficará em:
-
-`release/Plutao.exe`
-
-A publicação é `win-x64`, self-contained e single-file.
-
-
-## Compatibilidade de formatos
-
-A opção **MP4 compatível (H.264/AAC)** evita AV1 no YouTube. Em Instagram, TikTok e outras plataformas, o Plutao usa um seletor MP4 mais flexível para não rejeitar formatos progressivos disponíveis.
+Requer Windows 10/11 e .NET 8 SDK x64. Execute `build-release.bat`.
+O resultado fica em `release/Plutao.exe`.

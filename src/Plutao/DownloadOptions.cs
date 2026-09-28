@@ -22,7 +22,9 @@ public sealed class DownloadOptions
     public string OutputDirectory { get; set; } = "";
     public string TemporaryDirectory { get; set; } = "";
     public string BrowserCookies { get; set; } = "Nenhum";
-    public bool AllowPlaylists { get; set; }
+    public bool AllowPlaylists { get; set; } = true;
+    public int CollectionLimit { get; set; }
+    public string SelectedPlaylistItems { get; set; } = "";
     public bool EmbedMetadata { get; set; } = true;
     public bool SaveThumbnail { get; set; }
     public bool SaveInfoJson { get; set; }
