@@ -1,48 +1,22 @@
 # Plutao
 
-Baixador universal de vídeo e áudio para Windows baseado em **yt-dlp + FFmpeg**.
+Downloader de vídeo/áudio para Windows baseado em yt-dlp + FFmpeg, com análise de contas/perfis e seleção individual de mídia.
 
-## v0.3.1 — analisar conta e selecionar vídeos
+## MP4 compatível
 
-Agora o modo de página/conta/canal/perfil pode ser analisado antes do download.
+Com **MP4 compatível (garantir H.264/AAC)** ativado, o Plutao:
 
-Fluxo:
+1. tenta baixar H.264/AAC diretamente quando a plataforma oferece esses formatos;
+2. verifica os codecs reais do arquivo final com `ffprobe`;
+3. se o vídeo vier em VP9/AV1 (ou o áudio em codec não compatível), converte automaticamente para H.264/AAC;
+4. se o arquivo já estiver em H.264/AAC, não recodifica.
 
-1. Cole um único link de conta/página/perfil/canal.
-2. Deixe **Baixar página/conta/canal/perfil completo** ativado.
-3. Escolha o limite de análise (Todos, 10, 25, 50, 100 ou 200).
-4. Clique em **ANALISAR CONTA/PÁGINA**.
-5. O Plutao mostra quantos itens encontrou e abre uma lista para marcar/desmarcar individualmente.
-6. Clique em **USAR SELECIONADOS** e depois em **BAIXAR**.
+Isso evita depender de extensões AV1/VP9 do Windows para reproduzir MP4s baixados de Instagram, TikTok e outras plataformas.
 
-A seleção é aplicada ao link original usando os índices da coleção, então não é necessário transformar a conta em dezenas de links manualmente.
+## Contas e perfis
 
-> Algumas plataformas podem listar publicações que não são vídeos ou podem exigir cookies da sua própria sessão. A quantidade mostrada corresponde aos itens que o extrator conseguiu enumerar dentro do limite escolhido.
-
-## Recursos principais
-
-- Links individuais ou múltiplos links em fila.
-- Um link de perfil/conta/canal pode expandir para vários itens.
-- Análise prévia da conta/página com contagem.
-- Seleção individual dos itens antes de baixar.
-- Marcar todos / desmarcar todos.
-- Progresso por mídia dentro de contas/perfis.
-- Vídeo: Melhor, 2160p, 1440p, 1080p, 720p, 480p e 360p.
-- MP4 compatível H.264/AAC para YouTube.
-- MP4, MKV e WebM.
-- Áudio: MP3, M4A, AAC, FLAC, WAV e Opus.
-- Cookies de Edge, Chrome ou Firefox.
-- Organização opcional por canal/criador.
-- Controle de arquivos existentes e histórico anti-repetição.
-- yt-dlp, FFmpeg e Deno gerenciados pelo aplicativo.
-- Botões para abrir o último arquivo e sua pasta.
+Perfis do Instagram são analisados com gallery-dl como fallback e os vídeos selecionados são baixados individualmente pelo yt-dlp. YouTube, TikTok e outras coleções usam os extratores disponíveis conforme a plataforma.
 
 ## Compilar
 
-Requer Windows 10/11 e .NET 8 SDK x64. Execute `build-release.bat`.
-O resultado fica em `release/Plutao.exe`.
-
-
-## Análise de perfis do Instagram
-
-O yt-dlp está com o extrator de perfis do Instagram marcado como quebrado em versões atuais. O Plutao 0.3.2 usa automaticamente o **gallery-dl** como analisador alternativo para listar posts/reels de perfis e depois envia os vídeos selecionados ao yt-dlp por URL individual. O componente é baixado sob demanda. Em alguns perfis o Instagram pode exigir cookies de uma sessão válida; nesse caso selecione Edge, Chrome ou Firefox no campo **Cookies**.
+Execute `build-release.bat`. O executável final será criado em `release/Plutao.exe`.

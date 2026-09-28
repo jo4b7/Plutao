@@ -28,7 +28,7 @@ public sealed class MainForm : Form
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
     private readonly CheckBox chkJson = new() { Text = "Salvar info JSON", AutoSize = true };
     private readonly CheckBox chkArchive = new() { Text = "Evitar repetir o mesmo link (histórico)", Checked = false, AutoSize = true };
-    private readonly CheckBox chkCompatibleMp4 = new() { Text = "MP4 compatível (H.264/AAC)", Checked = true, AutoSize = true };
+    private readonly CheckBox chkCompatibleMp4 = new() { Text = "MP4 compatível (garantir H.264/AAC)", Checked = true, AutoSize = true };
 
     private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 44 };
     private readonly Button btnStop = new() { Text = "PARAR", Height = 44, Enabled = false };
@@ -577,7 +577,7 @@ public sealed class MainForm : Form
         if (options.UseArchive)
             AppendLog("Histórico anti-repetição: ativado (o mesmo ID pode ser ignorado mesmo ao mudar qualidade/formato).");
         if (options.Mode == DownloadMode.Video && string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase))
-            AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "H.264/AAC" : "melhor codec disponível")}");
+            AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "garantir H.264/AAC" : "melhor codec disponível")}");
 
         try
         {

@@ -12,6 +12,7 @@ public sealed class YtDlpRunner
     private Process? _process;
 
     private const string ProgressPrefix = "PLUTAO_PROGRESS|";
+    private const string FilePrefix = "PLUTAO_FILE|";
     private static readonly Regex PercentRegex = new(@"(?<p>\d{1,3}(?:[\.,]\d+)?)%", RegexOptions.Compiled);
     private static readonly Regex AnsiRegex = new(@"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", RegexOptions.Compiled);
     private static readonly string[] MediaExtensions =
@@ -19,6 +20,7 @@ public sealed class YtDlpRunner
         ".mp4", ".mkv", ".webm", ".mp3", ".m4a", ".aac", ".flac", ".wav", ".opus"
     };
 
+    private string? _currentCompletedFilePath;
     public string? LastCompletedFilePath { get; private set; }
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
@@ -502,6 +504,7 @@ public sealed class YtDlpRunner
             ? $" [{DateTime.Now:yyyyMMdd-HHmmssfff}]"
             : string.Empty;
 
+        _currentCompletedFilePath = null;
         var args = BuildArguments(url, options, uniqueSuffix);
         var psi = new ProcessStartInfo
         {
@@ -531,10 +534,36 @@ public sealed class YtDlpRunner
         await _process.WaitForExitAsync(ct);
         await Task.Delay(80, CancellationToken.None);
 
-        if (_process.ExitCode == 0)
+        var exitCode = _process.ExitCode;
+        if (exitCode == 0 && ShouldGuaranteeCompatibleMp4(options))
+        {
+            var path = _currentCompletedFilePath ?? LastCompletedFilePath;
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                try
+                {
+                    await EnsureCompatibleMp4Async(path, itemIndex, itemCount, log, progress, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    log.Report("[Compatibilidade] ERRO ao garantir H.264/AAC: " + ex.Message);
+                    return 2;
+                }
+            }
+            else
+            {
+                log.Report("[Compatibilidade] Não foi possível localizar o arquivo final para validar o codec.");
+            }
+        }
+
+        if (exitCode == 0)
             progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Concluído"));
 
-        return _process.ExitCode;
+        return exitCode;
     }
 
     private void HandleLine(
@@ -546,6 +575,18 @@ public sealed class YtDlpRunner
     {
         if (string.IsNullOrWhiteSpace(rawLine)) return;
         var line = AnsiRegex.Replace(rawLine, string.Empty).TrimEnd();
+
+        if (line.StartsWith(FilePrefix, StringComparison.Ordinal))
+        {
+            var path = line[FilePrefix.Length..].Trim().Trim('"');
+            if (!string.IsNullOrWhiteSpace(path) && IsMediaFile(path))
+            {
+                _currentCompletedFilePath = path;
+                LastCompletedFilePath = path;
+                log.Report($"[Arquivo] {path}");
+            }
+            return;
+        }
 
         if (line.StartsWith(ProgressPrefix, StringComparison.Ordinal))
         {
@@ -616,7 +657,10 @@ public sealed class YtDlpRunner
         }
 
         if (!string.IsNullOrWhiteSpace(candidate) && IsMediaFile(candidate))
+        {
+            _currentCompletedFilePath = candidate;
             LastCompletedFilePath = candidate;
+        }
     }
 
     private static bool IsMediaFile(string path)
@@ -637,6 +681,7 @@ public sealed class YtDlpRunner
             "--ffmpeg-location", _tools.ToolsDirectory,
             "--js-runtimes", $"deno:{_tools.DenoPath}",
             "--progress-template", "download:PLUTAO_PROGRESS|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.playlist_index)s|%(info.playlist_count)s|%(info.title)s",
+            "--print", "after_move:PLUTAO_FILE|%(filepath)s",
             "-P", o.OutputDirectory,
             "-P", $"temp:{o.TemporaryDirectory}",
             "-o", OutputTemplate(o, uniqueSuffix)
@@ -765,10 +810,13 @@ public sealed class YtDlpRunner
 
             if (preferCompatibleMp4)
             {
-                // Instagram, TikTok e vários outros sites costumam fornecer um
-                // MP4 progressivo (vídeo+áudio juntos) e nem sempre anunciam o
-                // codec como 'avc1'. Priorize MP4 sem exigir o rótulo de codec.
-                return $"b[ext=mp4]{limit}/" +
+                // Fora do YouTube, tenta H.264/AAC primeiro, mas mantém
+                // fallbacks flexíveis porque algumas plataformas não rotulam
+                // os codecs de forma consistente. Se o fallback vier em VP9/AV1,
+                // o arquivo final é validado e convertido automaticamente.
+                return $"bv[vcodec^=avc1]{limit}+ba[acodec^=mp4a]/" +
+                       $"b[vcodec^=avc1]{limit}/" +
+                       $"b[ext=mp4]{limit}/" +
                        $"bv*[ext=mp4]{limit}+ba/" +
                        $"b{limit}/" +
                        "b[ext=mp4]/b/bv*+ba";
@@ -782,6 +830,152 @@ public sealed class YtDlpRunner
 
         return $"bv*{limit}+ba/b{limit}/b";
     }
+
+    private static bool ShouldGuaranteeCompatibleMp4(DownloadOptions options)
+        => options.Mode == DownloadMode.Video &&
+           options.PreferCompatibleMp4 &&
+           string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase);
+
+    private async Task EnsureCompatibleMp4Async(
+        string path,
+        int itemIndex,
+        int itemCount,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
+    {
+        var videoCodec = await ProbeCodecAsync(path, "v:0", ct);
+        var audioCodec = await ProbeCodecAsync(path, "a:0", ct);
+
+        var videoCompatible = string.Equals(videoCodec, "h264", StringComparison.OrdinalIgnoreCase);
+        var audioCompatible = string.IsNullOrWhiteSpace(audioCodec) ||
+                              string.Equals(audioCodec, "aac", StringComparison.OrdinalIgnoreCase);
+
+        log.Report($"[Compatibilidade] Codec detectado: vídeo={EmptyAsUnknown(videoCodec)}, áudio={EmptyAsUnknown(audioCodec)}.");
+
+        if (videoCompatible && audioCompatible)
+        {
+            log.Report("[Compatibilidade] MP4 já está em H.264/AAC. Nenhuma conversão necessária.");
+            return;
+        }
+
+        progress.Report(new DownloadProgressInfo(
+            itemIndex, itemCount, 99, "", "", Path.GetFileName(path), "Convertendo para H.264/AAC"));
+        log.Report("[Compatibilidade] Convertendo arquivo para H.264/AAC para máxima compatibilidade...");
+
+        var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("Pasta do arquivo final não encontrada.");
+        var tempPath = Path.Combine(
+            directory,
+            $".{Path.GetFileNameWithoutExtension(path)}.plutao-compatible-{Guid.NewGuid():N}.mp4");
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = _tools.FfmpegPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+
+            foreach (var arg in new[] { "-hide_banner", "-loglevel", "error", "-y", "-i", path, "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0" })
+                psi.ArgumentList.Add(arg);
+
+            if (videoCompatible)
+            {
+                psi.ArgumentList.Add("-c:v");
+                psi.ArgumentList.Add("copy");
+            }
+            else
+            {
+                psi.ArgumentList.Add("-c:v");
+                psi.ArgumentList.Add("libx264");
+                psi.ArgumentList.Add("-preset");
+                psi.ArgumentList.Add("medium");
+                psi.ArgumentList.Add("-crf");
+                psi.ArgumentList.Add("18");
+                psi.ArgumentList.Add("-pix_fmt");
+                psi.ArgumentList.Add("yuv420p");
+            }
+
+            if (audioCompatible)
+            {
+                psi.ArgumentList.Add("-c:a");
+                psi.ArgumentList.Add("copy");
+            }
+            else
+            {
+                psi.ArgumentList.Add("-c:a");
+                psi.ArgumentList.Add("aac");
+                psi.ArgumentList.Add("-b:a");
+                psi.ArgumentList.Add("192k");
+            }
+
+            psi.ArgumentList.Add("-movflags");
+            psi.ArgumentList.Add("+faststart");
+            psi.ArgumentList.Add(tempPath);
+
+            _process = new Process { StartInfo = psi };
+            _process.Start();
+            using var reg = ct.Register(Stop);
+            var stdoutTask = _process.StandardOutput.ReadToEndAsync();
+            var stderrTask = _process.StandardError.ReadToEndAsync();
+            await _process.WaitForExitAsync(ct);
+            _ = await stdoutTask;
+            var stderr = await stderrTask;
+
+            if (_process.ExitCode != 0 || !File.Exists(tempPath))
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? "FFmpeg falhou durante a conversão." : stderr.Trim());
+
+            File.Move(tempPath, path, true);
+            _currentCompletedFilePath = path;
+            LastCompletedFilePath = path;
+            log.Report("[Compatibilidade] Conversão concluída: H.264/AAC.");
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+            catch { }
+        }
+    }
+
+    private async Task<string> ProbeCodecAsync(string path, string streamSelector, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.FfprobePath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var arg in new[] { "-v", "error", "-select_streams", streamSelector, "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", path })
+            psi.ArgumentList.Add(arg);
+
+        using var probe = new Process { StartInfo = psi };
+        probe.Start();
+        var stdoutTask = probe.StandardOutput.ReadToEndAsync();
+        var stderrTask = probe.StandardError.ReadToEndAsync();
+        await probe.WaitForExitAsync(ct);
+        var stdout = (await stdoutTask).Trim();
+        _ = await stderrTask;
+        return probe.ExitCode == 0
+            ? stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? string.Empty
+            : string.Empty;
+    }
+
+    private static string EmptyAsUnknown(string value)
+        => string.IsNullOrWhiteSpace(value) ? "nenhum/desconhecido" : value;
 
     private static int ParsePositiveInt(string? text)
     {
