@@ -73,9 +73,9 @@ public sealed class MainForm : Form
         _runner = new YtDlpRunner(_tools);
 
         Text = "Plutao - Downloader Universal";
-        Width = 1080;
-        Height = 700;
-        MinimumSize = new Size(820, 600);
+        Width = 1180;
+        Height = 780;
+        MinimumSize = new Size(860, 620);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -102,6 +102,7 @@ public sealed class MainForm : Form
 
         var root = new TableLayoutPanel
         {
+            Name = "rootLayout",
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -117,8 +118,9 @@ public sealed class MainForm : Form
 
         // Links: mantém a área grande, mas um pouco mais compacta.
         var urlBox = CreateGroup("Links (um por linha)");
+        urlBox.Name = "grpLinks";
         urlBox.AutoSize = false;
-        urlBox.Height = 125;
+        urlBox.Height = 155;
         var urlLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -139,6 +141,7 @@ public sealed class MainForm : Form
         // Formato usa FlowLayout: quando a largura/DPI muda, os controles quebram
         // de linha em vez de ficarem espremidos ou cortados.
         var formatBox = CreateGroup("Formato");
+        formatBox.Name = "grpFormat";
         var format = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -165,6 +168,7 @@ public sealed class MainForm : Form
 
         // Na tela principal ficam apenas as escolhas usadas o tempo todo.
         var mainOptions = CreateGroup("Destino e conta/página");
+        mainOptions.Name = "grpMainOptions";
         var opts = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -301,8 +305,9 @@ public sealed class MainForm : Form
         root.Controls.Add(toolsRow);
 
         var progressBox = CreateGroup("Progresso");
+        progressBox.Name = "grpProgress";
         progressBox.AutoSize = false;
-        progressBox.Height = 86;
+        progressBox.Height = 102;
         var progressLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -320,8 +325,9 @@ public sealed class MainForm : Form
 
         var actions = new TableLayoutPanel
         {
+            Name = "actionsRow",
             Dock = DockStyle.Top,
-            Height = 54,
+            Height = 62,
             ColumnCount = 4,
             Padding = new Padding(0, 4, 0, 4)
         };
@@ -339,6 +345,7 @@ public sealed class MainForm : Form
         actions.Controls.Add(btnOpenLastFolder, 3, 0);
         root.Controls.Add(actions);
 
+        grpLog.Name = "grpLog";
         grpLog.Text = "Log";
         grpLog.Dock = DockStyle.Top;
         grpLog.AutoSize = false;
@@ -366,9 +373,44 @@ public sealed class MainForm : Form
         btnToggleLog.Text = visible ? "OCULTAR LOG" : "MOSTRAR LOG";
     }
 
+    private void ApplyResponsiveSpacing()
+    {
+        if (!IsHandleCreated)
+            return;
+
+        var area = Screen.FromControl(this).WorkingArea;
+        var compact = area.Height <= 820 || area.Width <= 1400;
+        var roomy = area.Height >= 1000 && area.Width >= 1600;
+
+        SetNamedHeight("grpLinks", compact ? 125 : roomy ? 175 : 155);
+        SetNamedHeight("grpProgress", compact ? 86 : roomy ? 112 : 102);
+        SetNamedHeight("actionsRow", compact ? 54 : roomy ? 66 : 62);
+        SetNamedHeight("grpLog", compact ? 200 : roomy ? 300 : 240);
+
+        var root = Controls.Find("rootLayout", true).FirstOrDefault();
+        if (root is TableLayoutPanel layout)
+        {
+            layout.Padding = new Padding(compact ? 10 : 14);
+            foreach (Control child in layout.Controls)
+                child.Margin = new Padding(0, 0, 0, compact ? 5 : 8);
+        }
+    }
+
+    private void SetNamedHeight(string name, int height)
+    {
+        var control = Controls.Find(name, true).FirstOrDefault();
+        if (control is not null)
+            control.Height = height;
+    }
+
     private void FitToCurrentScreen()
     {
-        if (!IsHandleCreated || WindowState != FormWindowState.Normal)
+        if (!IsHandleCreated)
+            return;
+
+        ApplyResponsiveSpacing();
+
+        if (WindowState != FormWindowState.Normal)
             return;
 
         var area = Screen.FromControl(this).WorkingArea;
@@ -417,11 +459,18 @@ public sealed class MainForm : Form
         cmbCollectionLimit.Items.AddRange(new object[] { "Todos", "10", "25", "50", "100", "200" });
         cmbCollectionLimit.SelectedIndex = 0;
 
-        var downloads = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var plutaoRoot = Path.Combine(downloads, "Downloads", "Plutao");
-        txtVideoOutput.Text = Path.Combine(plutaoRoot, "Videos");
-        txtAudioOutput.Text = Path.Combine(plutaoRoot, "Audios");
+        // Pastas padrão desta instalação. O usuário ainda pode alterá-las
+        // normalmente pelos botões Procurar.
+        txtVideoOutput.Text = @"E:\[VIDEOS]";
+        txtAudioOutput.Text = @"E:\[MUSICAS]";
         txtTemp.Text = _tools.TemporaryDirectory;
+
+        foreach (var box in new[] { txtVideoOutput, txtAudioOutput, txtTemp })
+        {
+            box.AutoSize = false;
+            box.Height = 30;
+            box.Margin = new Padding(3, 4, 3, 4);
+        }
 
         chkOrganize.Checked = false;
         chkPlaylist.Checked = true;
@@ -464,6 +513,8 @@ public sealed class MainForm : Form
         btnToggleLog.Click += (_, _) => SetLogVisible(!_logVisible);
         Shown += (_, _) => FitToCurrentScreen();
         DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
+        LocationChanged += (_, _) => BeginInvoke(new Action(ApplyResponsiveSpacing));
+        ResizeEnd += (_, _) => ApplyResponsiveSpacing();
         btnOpenLastFile.Click += (_, _) => OpenLastFile();
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
         FormClosing += (_, _) => StopDownload();

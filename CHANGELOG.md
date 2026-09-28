@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5
+
+- Interface ganhou mais espaço vertical em monitores grandes sem voltar a ficar poluída.
+- Espaçamento se adapta automaticamente entre monitores HD e QHD/2K.
+- Área de links, progresso, botões e log usam alturas diferentes conforme a resolução disponível.
+- Campos de pastas ficaram um pouco mais altos para evitar aparência “espremida”.
+- Destino padrão de vídeos alterado para `E:\[VIDEOS]`.
+- Destino padrão de áudios alterado para `E:\[MUSICAS]`.
+- Mantidos Opções avançadas e Log recolhíveis.
+
 ## 0.3.4
 
 - Interface principal mais compacta sem mudar o tema visual.

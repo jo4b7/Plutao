@@ -28,3 +28,9 @@ Use **Opções avançadas** para temporários, cookies, política de arquivos ex
 O **Log** também pode ser recolhido para economizar espaço e reaparece automaticamente quando ocorre um erro.
 
 A interface usa DPI Per-Monitor V2, layout responsivo e rolagem de segurança para funcionar melhor ao mover a janela entre monitores QHD/2K e HD.
+
+Na v0.3.5 o espaçamento vertical também se adapta ao monitor: em QHD/2K a interface fica mais confortável e, em HD, volta automaticamente para medidas compactas.
+
+Pastas padrão desta instalação:
+- Vídeos: `E:\[VIDEOS]`
+- Áudios: `E:\[MUSICAS]`
