@@ -39,7 +39,7 @@ public sealed class YtDlpRunner
 
         progress.Report(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando componentes"));
         log.Report("Preparando componentes...");
-        await _tools.EnsureAllAsync(log, ct);
+        await _tools.EnsureAllAsync(log, progress, ct);
 
         var hadErrors = false;
         for (var i = 0; i < urls.Count; i++)

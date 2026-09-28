@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Corrige cancelamento falso ao baixar FFmpeg em conexões onde o download leva mais de 100 segundos.
+- Barra de progresso agora mostra também o download dos componentes (yt-dlp, FFmpeg e Deno).
+- Exibe MB baixados, velocidade e ETA durante a preparação de componentes.
+- O botão PARAR também cancela a atualização de componentes.
+
 ## 0.2.1
 
 - Adicionada opção **Organizar por canal/criador**, que pode ser ativada ou desativada.

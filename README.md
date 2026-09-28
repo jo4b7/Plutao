@@ -41,3 +41,7 @@ Execute `build-release.bat`. O resultado ficará em:
 `release/Plutao.exe`
 
 A publicação é `win-x64`, self-contained e single-file.
+
+## v0.2.2
+
+A preparação inicial também possui progresso para yt-dlp, FFmpeg e Deno, sem o limite de 100 segundos que podia cancelar o FFmpeg em conexões mais lentas.

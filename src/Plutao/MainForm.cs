@@ -434,10 +434,21 @@ public sealed class MainForm : Form
             lblStatus.Text = "Atualizando...";
             lblStatus.ForeColor = TextMuted;
             lblCurrent.Text = "Atualizando yt-dlp, FFmpeg e Deno...";
-            await _tools.UpdateAllAsync(LogProgress(), CancellationToken.None);
+            _cts = new CancellationTokenSource();
+            await _tools.UpdateAllAsync(
+                LogProgress(),
+                new Progress<DownloadProgressInfo>(SetProgressUi),
+                _cts.Token);
             lblStatus.Text = "Componentes prontos";
             lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
             lblCurrent.Text = "yt-dlp, FFmpeg e Deno estão prontos.";
+        }
+        catch (OperationCanceledException)
+        {
+            lblStatus.Text = "Cancelado";
+            lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
+            lblCurrent.Text = "Atualização de componentes cancelada.";
+            AppendLog("Atualização de componentes cancelada.");
         }
         catch (Exception ex)
         {
@@ -449,6 +460,8 @@ public sealed class MainForm : Form
         finally
         {
             SetBusy(false);
+            _cts?.Dispose();
+            _cts = null;
         }
     }
 
@@ -475,7 +488,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        var overall = info.ItemIndex <= 0 ? 0 : info.OverallPercent;
+        var overall = info.ItemIndex <= 0 ? info.Percent : info.OverallPercent;
         progress.Value = overall;
 
         var parts = new List<string>();

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 
@@ -20,7 +21,12 @@ public sealed class ToolManager
         TemporaryDirectory = ResolveDefaultTempDirectory();
         Directory.CreateDirectory(ToolsDirectory);
         Directory.CreateDirectory(TemporaryDirectory);
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.2.1"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.2.2"));
+
+        // O HttpClient usa 100 s por padrão. O pacote do FFmpeg pode levar mais
+        // que isso em conexões lentas e acabava sendo mostrado como "cancelado".
+        // O cancelamento agora é controlado somente pelo botão PARAR/token.
+        _http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public static string ResolveDefaultTempDirectory()
@@ -35,45 +41,64 @@ public sealed class ToolManager
             "Temporarios");
     }
 
-    public async Task EnsureAllAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task EnsureAllAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         Directory.CreateDirectory(TemporaryDirectory);
-        await EnsureYtDlpAsync(log, ct);
-        await EnsureFfmpegAsync(log, ct);
-        await EnsureDenoAsync(log, ct);
+        await EnsureYtDlpAsync(log, progress, ct);
+        await EnsureFfmpegAsync(log, progress, ct);
+        await EnsureDenoAsync(log, progress, ct);
     }
 
-    public async Task UpdateAllAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task UpdateAllAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         Directory.CreateDirectory(TemporaryDirectory);
-        await DownloadYtDlpAsync(log, ct);
-        await DownloadFfmpegAsync(log, ct);
-        await DownloadDenoAsync(log, ct);
+        await DownloadYtDlpAsync(log, progress, ct);
+        await DownloadFfmpegAsync(log, progress, ct);
+        await DownloadDenoAsync(log, progress, ct);
     }
 
-    public async Task EnsureYtDlpAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task EnsureYtDlpAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         if (File.Exists(YtDlpPath)) return;
-        await DownloadYtDlpAsync(log, ct);
+        await DownloadYtDlpAsync(log, progress, ct);
     }
 
-    public async Task DownloadYtDlpAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task DownloadYtDlpAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         const string url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
         log?.Report("[Componentes] Baixando/atualizando yt-dlp...");
         var temp = Path.Combine(TemporaryDirectory, "yt-dlp.exe.download");
-        await DownloadFileAsync(url, temp, ct);
+        await DownloadFileAsync(url, temp, "Baixando yt-dlp", progress, ct);
         File.Move(temp, YtDlpPath, true);
+        progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "yt-dlp pronto"));
         log?.Report("[Componentes] yt-dlp pronto.");
     }
 
-    public async Task EnsureFfmpegAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task EnsureFfmpegAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         if (File.Exists(FfmpegPath) && File.Exists(FfprobePath)) return;
-        await DownloadFfmpegAsync(log, ct);
+        await DownloadFfmpegAsync(log, progress, ct);
     }
 
-    public async Task DownloadFfmpegAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task DownloadFfmpegAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         const string url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
         log?.Report("[Componentes] Baixando FFmpeg...");
@@ -84,10 +109,14 @@ public sealed class ToolManager
 
         try
         {
-            await DownloadFileAsync(url, zipPath, ct);
+            await DownloadFileAsync(url, zipPath, "Baixando FFmpeg", progress, ct);
+            ct.ThrowIfCancellationRequested();
+
             log?.Report("[Componentes] Extraindo FFmpeg...");
+            progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "Extraindo FFmpeg"));
             ZipFile.ExtractToDirectory(zipPath, extractDir);
 
+            ct.ThrowIfCancellationRequested();
             var ffmpeg = Directory.EnumerateFiles(extractDir, "ffmpeg.exe", SearchOption.AllDirectories).FirstOrDefault();
             var ffprobe = Directory.EnumerateFiles(extractDir, "ffprobe.exe", SearchOption.AllDirectories).FirstOrDefault();
             if (ffmpeg is null || ffprobe is null)
@@ -95,6 +124,7 @@ public sealed class ToolManager
 
             File.Copy(ffmpeg, FfmpegPath, true);
             File.Copy(ffprobe, FfprobePath, true);
+            progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "FFmpeg pronto"));
             log?.Report("[Componentes] FFmpeg pronto.");
         }
         finally
@@ -104,13 +134,19 @@ public sealed class ToolManager
         }
     }
 
-    public async Task EnsureDenoAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task EnsureDenoAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         if (File.Exists(DenoPath)) return;
-        await DownloadDenoAsync(log, ct);
+        await DownloadDenoAsync(log, progress, ct);
     }
 
-    public async Task DownloadDenoAsync(IProgress<string>? log = null, CancellationToken ct = default)
+    public async Task DownloadDenoAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
     {
         const string url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
         log?.Report("[Componentes] Baixando Deno (necessário para suporte completo ao YouTube)...");
@@ -121,13 +157,17 @@ public sealed class ToolManager
 
         try
         {
-            await DownloadFileAsync(url, zipPath, ct);
+            await DownloadFileAsync(url, zipPath, "Baixando Deno", progress, ct);
+            ct.ThrowIfCancellationRequested();
+
+            progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "Extraindo Deno"));
             ZipFile.ExtractToDirectory(zipPath, extractDir);
             var deno = Directory.EnumerateFiles(extractDir, "deno.exe", SearchOption.AllDirectories).FirstOrDefault();
             if (deno is null)
                 throw new InvalidOperationException("Deno não encontrado no pacote baixado.");
 
             File.Copy(deno, DenoPath, true);
+            progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "Deno pronto"));
             log?.Report("[Componentes] Deno pronto.");
         }
         finally
@@ -137,14 +177,95 @@ public sealed class ToolManager
         }
     }
 
-    private async Task DownloadFileAsync(string url, string destination, CancellationToken ct)
+    private async Task DownloadFileAsync(
+        string url,
+        string destination,
+        string stage,
+        IProgress<DownloadProgressInfo>? progress,
+        CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
+
+        var totalBytes = response.Content.Headers.ContentLength;
         await using var input = await response.Content.ReadAsStreamAsync(ct);
-        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
-        await input.CopyToAsync(output, ct);
+        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 128, true);
+
+        var buffer = new byte[1024 * 128];
+        long downloaded = 0;
+        var sw = Stopwatch.StartNew();
+        var lastReport = TimeSpan.Zero;
+
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+            if (read == 0) break;
+
+            await output.WriteAsync(buffer.AsMemory(0, read), ct);
+            downloaded += read;
+
+            if (sw.Elapsed - lastReport < TimeSpan.FromMilliseconds(180))
+                continue;
+
+            lastReport = sw.Elapsed;
+            ReportTransferProgress(stage, downloaded, totalBytes, sw.Elapsed, progress);
+        }
+
+        ReportTransferProgress(stage, downloaded, totalBytes, sw.Elapsed, progress, forceComplete: true);
+    }
+
+    private static void ReportTransferProgress(
+        string stage,
+        long downloaded,
+        long? totalBytes,
+        TimeSpan elapsed,
+        IProgress<DownloadProgressInfo>? progress,
+        bool forceComplete = false)
+    {
+        if (progress is null) return;
+
+        var percent = totalBytes is > 0
+            ? Math.Clamp(downloaded * 100.0 / totalBytes.Value, 0, 100)
+            : forceComplete ? 100 : 0;
+
+        var seconds = Math.Max(elapsed.TotalSeconds, 0.001);
+        var bytesPerSecond = downloaded / seconds;
+        var speed = FormatSpeed(bytesPerSecond);
+        var eta = string.Empty;
+
+        if (totalBytes is > 0 && bytesPerSecond > 0 && downloaded < totalBytes.Value)
+        {
+            var secondsLeft = (totalBytes.Value - downloaded) / bytesPerSecond;
+            eta = FormatEta(secondsLeft);
+        }
+
+        var downloadedMiB = downloaded / 1024d / 1024d;
+        var title = totalBytes is > 0
+            ? $"{downloadedMiB:0.0}/{totalBytes.Value / 1024d / 1024d:0.0} MB"
+            : $"{downloadedMiB:0.0} MB";
+
+        progress.Report(new DownloadProgressInfo(0, 0, percent, speed, eta, title, stage));
+    }
+
+    private static string FormatSpeed(double bytesPerSecond)
+    {
+        if (bytesPerSecond >= 1024 * 1024)
+            return $"{bytesPerSecond / 1024 / 1024:0.0} MB/s";
+        if (bytesPerSecond >= 1024)
+            return $"{bytesPerSecond / 1024:0.0} KB/s";
+        return $"{bytesPerSecond:0} B/s";
+    }
+
+    private static string FormatEta(double seconds)
+    {
+        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0)
+            return string.Empty;
+
+        var t = TimeSpan.FromSeconds(seconds);
+        if (t.TotalHours >= 1)
+            return $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}";
+        return $"{t.Minutes:00}:{t.Seconds:00}";
     }
 
     private static void TryDeleteFile(string path)
