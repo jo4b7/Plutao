@@ -6,9 +6,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>Plutao</AssemblyName>
     <RootNamespace>Plutao</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <ApplicationIcon Condition="Exists('plutao.ico')">plutao.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>

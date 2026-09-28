@@ -16,32 +16,51 @@ public sealed class MainForm : Form
     private readonly ComboBox cmbAudioFormat = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox cmbCookies = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox txtOutput = new();
+    private readonly TextBox txtTemp = new();
     private readonly CheckBox chkPlaylist = new() { Text = "Permitir playlist/canal/perfil", AutoSize = true };
     private readonly CheckBox chkMetadata = new() { Text = "Incorporar metadados", Checked = true, AutoSize = true };
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
     private readonly CheckBox chkJson = new() { Text = "Salvar info JSON", AutoSize = true };
-    private readonly CheckBox chkArchive = new() { Text = "Evitar downloads repetidos (arquivo de histórico)", Checked = true, AutoSize = true };
-    private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 42 };
-    private readonly Button btnStop = new() { Text = "PARAR", Height = 42, Enabled = false };
+    private readonly CheckBox chkArchive = new() { Text = "Evitar downloads repetidos", Checked = true, AutoSize = true };
+
+    private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 44 };
+    private readonly Button btnStop = new() { Text = "PARAR", Height = 44, Enabled = false };
     private readonly Button btnPaste = new() { Text = "Colar" };
     private readonly Button btnBrowse = new() { Text = "Procurar..." };
-    private readonly Button btnUpdate = new() { Text = "Atualizar yt-dlp" };
-    private readonly Button btnFfmpeg = new() { Text = "Instalar FFmpeg" };
-    private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 100 };
+    private readonly Button btnBrowseTemp = new() { Text = "Procurar..." };
+    private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
+    private readonly Button btnClearLog = new() { Text = "Limpar log" };
+    private readonly Button btnOpenOutput = new() { Text = "Abrir pasta" };
+
+    private readonly DarkProgressBar progress = new() { Dock = DockStyle.Fill };
     private readonly TextBox txtLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false };
     private readonly Label lblStatus = new() { Text = "Pronto", AutoSize = true };
+    private readonly Label lblCurrent = new() { Text = "Aguardando download", AutoEllipsis = true, Dock = DockStyle.Fill };
+
+    private static readonly Color Bg = Color.FromArgb(10, 10, 10);
+    private static readonly Color Panel = Color.FromArgb(18, 18, 18);
+    private static readonly Color Field = Color.FromArgb(28, 28, 28);
+    private static readonly Color Border = Color.FromArgb(62, 62, 62);
+    private static readonly Color TextMain = Color.FromArgb(240, 240, 240);
+    private static readonly Color TextMuted = Color.FromArgb(180, 180, 180);
+    private static readonly Color Accent = Color.FromArgb(111, 71, 255);
 
     public MainForm()
     {
         _runner = new YtDlpRunner(_tools);
+
         Text = "Plutao - Downloader Universal";
-        Width = 950;
-        Height = 760;
-        MinimumSize = new Size(820, 650);
+        Width = 1040;
+        Height = 820;
+        MinimumSize = new Size(900, 700);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10F);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = Bg;
+        ForeColor = TextMain;
 
         BuildUi();
+        ApplyDarkTheme(this);
         WireEvents();
         LoadDefaults();
     }
@@ -51,82 +70,155 @@ public sealed class MainForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(14),
+            Padding = new Padding(16),
             ColumnCount = 1,
-            RowCount = 6
+            RowCount = 7,
+            BackColor = Bg
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
+
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 145));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(root);
 
-        var urlBox = new GroupBox { Text = "Links (um por linha)", Dock = DockStyle.Fill };
-        var urlLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(8) };
+        var urlBox = CreateGroup("Links (um por linha)");
+        var urlLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(10) };
         urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
         txtUrls.Dock = DockStyle.Fill;
         btnPaste.Dock = DockStyle.Top;
+        btnPaste.Height = 34;
         urlLayout.Controls.Add(txtUrls, 0, 0);
         urlLayout.Controls.Add(btnPaste, 1, 0);
         urlBox.Controls.Add(urlLayout);
         root.Controls.Add(urlBox);
 
-        var formatBox = new GroupBox { Text = "Formato", Dock = DockStyle.Fill };
-        var format = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 8, Padding = new Padding(8), AutoSize = true };
-        for (int i = 0; i < 8; i++) format.ColumnStyles.Add(new ColumnStyle(i % 2 == 0 ? SizeType.AutoSize : SizeType.Percent, i % 2 == 0 ? 0 : 25));
+        var formatBox = CreateGroup("Formato");
+        var format = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 8,
+            Padding = new Padding(10)
+        };
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        format.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+
         format.Controls.Add(rbVideo, 0, 0);
         format.Controls.Add(rbAudio, 1, 0);
-        format.Controls.Add(new Label { Text = "Qualidade:", AutoSize = true, Anchor = AnchorStyles.Left }, 2, 0);
+        format.Controls.Add(LabelFor("Qualidade:"), 2, 0);
         format.Controls.Add(cmbQuality, 3, 0);
-        format.Controls.Add(new Label { Text = "Contêiner:", AutoSize = true, Anchor = AnchorStyles.Left }, 4, 0);
+        format.Controls.Add(LabelFor("Contêiner:"), 4, 0);
         format.Controls.Add(cmbVideoFormat, 5, 0);
-        format.Controls.Add(new Label { Text = "Áudio:", AutoSize = true, Anchor = AnchorStyles.Left }, 6, 0);
+        format.Controls.Add(LabelFor("Áudio:"), 6, 0);
         format.Controls.Add(cmbAudioFormat, 7, 0);
+        SetFill(cmbQuality, cmbVideoFormat, cmbAudioFormat);
         formatBox.Controls.Add(format);
         root.Controls.Add(formatBox);
 
-        var optsBox = new GroupBox { Text = "Destino e opções", Dock = DockStyle.Fill };
-        var opts = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 3, Padding = new Padding(8) };
+        var optsBox = CreateGroup("Destino e opções");
+        var opts = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 4,
+            RowCount = 4,
+            Padding = new Padding(10)
+        };
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        opts.Controls.Add(new Label { Text = "Pasta:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+
+        opts.Controls.Add(LabelFor("Pasta final:"), 0, 0);
         txtOutput.Dock = DockStyle.Fill;
         opts.Controls.Add(txtOutput, 1, 0);
         opts.Controls.Add(btnBrowse, 2, 0);
-        opts.Controls.Add(new Label { Text = "Cookies:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 1);
-        opts.Controls.Add(cmbCookies, 1, 1);
-        opts.Controls.Add(chkPlaylist, 2, 1);
+        opts.Controls.Add(btnOpenOutput, 3, 0);
+
+        opts.Controls.Add(LabelFor("Temporários:"), 0, 1);
+        txtTemp.Dock = DockStyle.Fill;
+        opts.Controls.Add(txtTemp, 1, 1);
+        opts.Controls.Add(btnBrowseTemp, 2, 1);
+        opts.SetColumnSpan(btnBrowseTemp, 2);
+
+        opts.Controls.Add(LabelFor("Cookies:"), 0, 2);
+        cmbCookies.Width = 160;
+        opts.Controls.Add(cmbCookies, 1, 2);
+        opts.Controls.Add(chkPlaylist, 2, 2);
         opts.SetColumnSpan(chkPlaylist, 2);
-        var checks = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        checks.Controls.Add(chkMetadata); checks.Controls.Add(chkThumb); checks.Controls.Add(chkJson); checks.Controls.Add(chkArchive);
-        opts.Controls.Add(checks, 0, 2); opts.SetColumnSpan(checks, 4);
+
+        var checks = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            Padding = new Padding(0, 6, 0, 0)
+        };
+        checks.Controls.Add(chkMetadata);
+        checks.Controls.Add(chkThumb);
+        checks.Controls.Add(chkJson);
+        checks.Controls.Add(chkArchive);
+        opts.Controls.Add(checks, 0, 3);
+        opts.SetColumnSpan(checks, 4);
+
         optsBox.Controls.Add(opts);
         root.Controls.Add(optsBox);
 
-        var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
-        tools.Controls.Add(btnUpdate);
-        tools.Controls.Add(btnFfmpeg);
-        tools.Controls.Add(lblStatus);
-        root.Controls.Add(tools);
+        var toolsRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 4,
+            Padding = new Padding(0, 8, 0, 4)
+        };
+        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        toolsRow.Controls.Add(btnUpdate, 0, 0);
+        toolsRow.Controls.Add(btnClearLog, 1, 0);
+        lblStatus.Anchor = AnchorStyles.Right;
+        toolsRow.Controls.Add(lblStatus, 3, 0);
+        root.Controls.Add(toolsRow);
 
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3 };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        var progressBox = CreateGroup("Progresso");
+        var progressLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(10)
+        };
+        lblCurrent.Height = 24;
+        lblCurrent.ForeColor = TextMuted;
+        progressLayout.Controls.Add(lblCurrent, 0, 0);
+        progressLayout.Controls.Add(progress, 0, 1);
+        progressBox.Controls.Add(progressLayout);
+        root.Controls.Add(progressBox);
+
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(0, 8, 0, 8) };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
         btnDownload.Dock = DockStyle.Fill;
         btnStop.Dock = DockStyle.Fill;
-        progress.Dock = DockStyle.Fill;
         actions.Controls.Add(btnDownload, 0, 0);
         actions.Controls.Add(btnStop, 1, 0);
-        actions.Controls.Add(progress, 2, 0);
         root.Controls.Add(actions);
 
-        var logBox = new GroupBox { Text = "Log", Dock = DockStyle.Fill };
+        var logBox = CreateGroup("Log");
         txtLog.Dock = DockStyle.Fill;
         logBox.Controls.Add(txtLog);
         root.Controls.Add(logBox);
@@ -136,13 +228,24 @@ public sealed class MainForm : Form
     {
         cmbQuality.Items.AddRange(new object[] { "Melhor", "2160p", "1440p", "1080p", "720p", "480p", "360p" });
         cmbQuality.SelectedItem = "1080p";
+
         cmbVideoFormat.Items.AddRange(new object[] { "mp4", "mkv", "webm" });
         cmbVideoFormat.SelectedItem = "mp4";
+
         cmbAudioFormat.Items.AddRange(new object[] { "mp3", "m4a", "aac", "flac", "wav", "opus" });
         cmbAudioFormat.SelectedItem = "mp3";
-        cmbCookies.Items.AddRange(new object[] { "Nenhum", "Chrome", "Edge", "Firefox" });
+
+        cmbCookies.Items.AddRange(new object[] { "Nenhum", "Edge", "Chrome", "Firefox" });
         cmbCookies.SelectedIndex = 0;
-        txtOutput.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Plutao");
+
+        txtOutput.Text = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads",
+            "Plutao");
+
+        txtTemp.Text = _tools.TemporaryDirectory;
+        progress.Value = 0;
+        progress.DisplayText = "0%";
         UpdateModeUi();
     }
 
@@ -151,11 +254,13 @@ public sealed class MainForm : Form
         rbVideo.CheckedChanged += (_, _) => UpdateModeUi();
         rbAudio.CheckedChanged += (_, _) => UpdateModeUi();
         btnPaste.Click += (_, _) => { if (Clipboard.ContainsText()) txtUrls.Text = Clipboard.GetText(); };
-        btnBrowse.Click += (_, _) => BrowseFolder();
+        btnBrowse.Click += (_, _) => BrowseFolder(txtOutput, "Escolha onde salvar os downloads");
+        btnBrowseTemp.Click += (_, _) => BrowseFolder(txtTemp, "Escolha a pasta para arquivos temporários");
+        btnOpenOutput.Click += (_, _) => OpenOutputFolder();
         btnDownload.Click += async (_, _) => await StartDownloadAsync();
         btnStop.Click += (_, _) => StopDownload();
-        btnUpdate.Click += async (_, _) => await RunToolActionAsync(() => _tools.DownloadYtDlpAsync(LogProgress()));
-        btnFfmpeg.Click += async (_, _) => await RunToolActionAsync(() => _tools.DownloadFfmpegAsync(LogProgress()));
+        btnUpdate.Click += async (_, _) => await RunToolActionAsync();
+        btnClearLog.Click += (_, _) => txtLog.Clear();
         FormClosing += (_, _) => StopDownload();
     }
 
@@ -166,24 +271,50 @@ public sealed class MainForm : Form
         cmbAudioFormat.Enabled = rbAudio.Checked;
     }
 
-    private void BrowseFolder()
+    private void BrowseFolder(TextBox target, string description)
     {
-        using var dialog = new FolderBrowserDialog { InitialDirectory = txtOutput.Text, UseDescriptionForTitle = true, Description = "Escolha onde salvar os downloads" };
-        if (dialog.ShowDialog(this) == DialogResult.OK) txtOutput.Text = dialog.SelectedPath;
+        using var dialog = new FolderBrowserDialog
+        {
+            InitialDirectory = target.Text,
+            UseDescriptionForTitle = true,
+            Description = description
+        };
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            target.Text = dialog.SelectedPath;
+    }
+
+    private void OpenOutputFolder()
+    {
+        try
+        {
+            var path = txtOutput.Text.Trim();
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo("explorer.exe", path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private async Task StartDownloadAsync()
     {
-        var urls = txtUrls.Lines.Select(x => x.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
+        var urls = txtUrls.Lines
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct()
+            .ToList();
+
         if (urls.Count == 0)
         {
             MessageBox.Show(this, "Cole pelo menos um link.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(txtOutput.Text))
+        if (string.IsNullOrWhiteSpace(txtOutput.Text) || string.IsNullOrWhiteSpace(txtTemp.Text))
         {
-            MessageBox.Show(this, "Escolha a pasta de destino.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Escolha as pastas de destino e temporários.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -194,6 +325,7 @@ public sealed class MainForm : Form
             VideoContainer = cmbVideoFormat.SelectedItem?.ToString() ?? "mp4",
             AudioFormat = cmbAudioFormat.SelectedItem?.ToString() ?? "mp3",
             OutputDirectory = txtOutput.Text.Trim(),
+            TemporaryDirectory = txtTemp.Text.Trim(),
             BrowserCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
             AllowPlaylists = chkPlaylist.Checked,
             EmbedMetadata = chkMetadata.Checked,
@@ -202,25 +334,51 @@ public sealed class MainForm : Form
             UseArchive = chkArchive.Checked
         };
 
+        _tools.TemporaryDirectory = options.TemporaryDirectory;
         _cts = new CancellationTokenSource();
         SetBusy(true);
-        progress.Value = 0;
+        SetProgressUi(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando"));
         AppendLog($"Iniciando {urls.Count} link(s)...");
 
         try
         {
-            var code = await _runner.DownloadAsync(urls, options, LogProgress(), new Progress<int>(SetProgress), _cts.Token);
-            lblStatus.Text = code == 0 ? "Concluído" : "Concluído com erro(s)";
-            AppendLog(code == 0 ? "Fila concluída." : "Fila concluída; confira o log para erros.");
+            var code = await _runner.DownloadAsync(
+                urls,
+                options,
+                LogProgress(),
+                new Progress<DownloadProgressInfo>(SetProgressUi),
+                _cts.Token);
+
+            if (code == 0)
+            {
+                lblStatus.Text = "Concluído";
+                lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
+                progress.Value = 100;
+                progress.DisplayText = "100% - concluído";
+                progress.Invalidate();
+                lblCurrent.Text = "Download concluído.";
+                AppendLog("Fila concluída com sucesso.");
+            }
+            else
+            {
+                lblStatus.Text = "Concluído com erro";
+                lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
+                lblCurrent.Text = "Um ou mais links falharam. Confira o log.";
+                AppendLog("Fila concluída com erro(s). Confira as mensagens acima.");
+            }
         }
         catch (OperationCanceledException)
         {
             lblStatus.Text = "Cancelado";
+            lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
+            lblCurrent.Text = "Download cancelado.";
             AppendLog("Download cancelado.");
         }
         catch (Exception ex)
         {
             lblStatus.Text = "Erro";
+            lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
+            lblCurrent.Text = "Erro durante o download.";
             AppendLog("ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -238,36 +396,73 @@ public sealed class MainForm : Form
         _runner.Stop();
     }
 
-    private async Task RunToolActionAsync(Func<Task> action)
+    private async Task RunToolActionAsync()
     {
         try
         {
+            _tools.TemporaryDirectory = txtTemp.Text.Trim();
             SetBusy(true);
-            await action();
-            lblStatus.Text = "Ferramentas prontas";
+            lblStatus.Text = "Atualizando...";
+            lblStatus.ForeColor = TextMuted;
+            lblCurrent.Text = "Atualizando yt-dlp, FFmpeg e Deno...";
+            await _tools.UpdateAllAsync(LogProgress(), CancellationToken.None);
+            lblStatus.Text = "Componentes prontos";
+            lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
+            lblCurrent.Text = "yt-dlp, FFmpeg e Deno estão prontos.";
         }
         catch (Exception ex)
         {
+            lblStatus.Text = "Erro";
+            lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
             AppendLog("ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-        finally { SetBusy(false); }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private IProgress<string> LogProgress() => new Progress<string>(AppendLog);
 
     private void AppendLog(string text)
     {
-        if (InvokeRequired) { BeginInvoke(() => AppendLog(text)); return; }
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => AppendLog(text));
+            return;
+        }
+
         txtLog.AppendText(text + Environment.NewLine);
         txtLog.SelectionStart = txtLog.TextLength;
         txtLog.ScrollToCaret();
     }
 
-    private void SetProgress(int value)
+    private void SetProgressUi(DownloadProgressInfo info)
     {
-        if (InvokeRequired) { BeginInvoke(() => SetProgress(value)); return; }
-        progress.Value = Math.Clamp(value, progress.Minimum, progress.Maximum);
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => SetProgressUi(info));
+            return;
+        }
+
+        var overall = info.ItemIndex <= 0 ? 0 : info.OverallPercent;
+        progress.Value = overall;
+
+        var parts = new List<string>();
+        if (info.ItemIndex > 0 && info.ItemCount > 0)
+            parts.Add($"Item {info.ItemIndex}/{info.ItemCount}");
+        parts.Add($"{info.Percent:0.0}%");
+        if (!string.IsNullOrWhiteSpace(info.Speed)) parts.Add(info.Speed);
+        if (!string.IsNullOrWhiteSpace(info.Eta)) parts.Add("ETA " + info.Eta);
+
+        progress.DisplayText = string.Join("  •  ", parts);
+        progress.Invalidate();
+
+        var title = string.IsNullOrWhiteSpace(info.Title) ? string.Empty : $" — {info.Title}";
+        lblCurrent.Text = $"{info.Stage}{title}";
+        lblStatus.Text = info.Stage;
+        lblStatus.ForeColor = TextMuted;
     }
 
     private void SetBusy(bool busy)
@@ -275,7 +470,68 @@ public sealed class MainForm : Form
         btnDownload.Enabled = !busy;
         btnStop.Enabled = busy;
         btnUpdate.Enabled = !busy;
-        btnFfmpeg.Enabled = !busy;
-        lblStatus.Text = busy ? "Trabalhando..." : lblStatus.Text;
+        btnBrowse.Enabled = !busy;
+        btnBrowseTemp.Enabled = !busy;
+    }
+
+    private static GroupBox CreateGroup(string title)
+        => new() { Text = title, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(4) };
+
+    private static Label LabelFor(string text)
+        => new() { Text = text, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(6, 7, 6, 3) };
+
+    private static void SetFill(params ComboBox[] controls)
+    {
+        foreach (var control in controls)
+            control.Dock = DockStyle.Fill;
+    }
+
+    private static void ApplyDarkTheme(Control root)
+    {
+        root.BackColor = root is TextBox or ComboBox ? Field : Bg;
+        root.ForeColor = TextMain;
+
+        switch (root)
+        {
+            case GroupBox:
+            case TableLayoutPanel:
+            case FlowLayoutPanel:
+                root.BackColor = Panel;
+                break;
+
+            case TextBox textBox:
+                textBox.BackColor = Field;
+                textBox.ForeColor = TextMain;
+                textBox.BorderStyle = BorderStyle.FixedSingle;
+                break;
+
+            case ComboBox comboBox:
+                comboBox.BackColor = Field;
+                comboBox.ForeColor = TextMain;
+                comboBox.FlatStyle = FlatStyle.Flat;
+                break;
+
+            case Button button:
+                button.BackColor = Field;
+                button.ForeColor = TextMain;
+                button.FlatStyle = FlatStyle.Flat;
+                button.FlatAppearance.BorderColor = Border;
+                button.FlatAppearance.MouseOverBackColor = Color.FromArgb(42, 42, 42);
+                button.FlatAppearance.MouseDownBackColor = Accent;
+                break;
+
+            case CheckBox checkBox:
+                checkBox.BackColor = Panel;
+                checkBox.ForeColor = TextMain;
+                break;
+
+            case RadioButton radioButton:
+                radioButton.BackColor = Panel;
+                radioButton.ForeColor = TextMain;
+                break;
+        }
+
+        foreach (Control child in root.Controls)
+            ApplyDarkTheme(child);
     }
 }

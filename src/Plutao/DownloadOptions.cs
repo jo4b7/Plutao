@@ -13,6 +13,7 @@ public sealed class DownloadOptions
     public string VideoContainer { get; set; } = "mp4";
     public string AudioFormat { get; set; } = "mp3";
     public string OutputDirectory { get; set; } = "";
+    public string TemporaryDirectory { get; set; } = "";
     public string BrowserCookies { get; set; } = "Nenhum";
     public bool AllowPlaylists { get; set; }
     public bool EmbedMetadata { get; set; } = true;

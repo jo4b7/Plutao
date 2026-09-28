@@ -9,7 +9,10 @@ public sealed class YtDlpRunner
 {
     private readonly ToolManager _tools;
     private Process? _process;
+
+    private const string ProgressPrefix = "PLUTAO_PROGRESS|";
     private static readonly Regex PercentRegex = new(@"(?<p>\d{1,3}(?:[\.,]\d+)?)%", RegexOptions.Compiled);
+    private static readonly Regex AnsiRegex = new(@"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", RegexOptions.Compiled);
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
 
@@ -17,7 +20,8 @@ public sealed class YtDlpRunner
     {
         try
         {
-            if (_process is { HasExited: false }) _process.Kill(true);
+            if (_process is { HasExited: false })
+                _process.Kill(true);
         }
         catch { }
     }
@@ -26,28 +30,45 @@ public sealed class YtDlpRunner
         IReadOnlyList<string> urls,
         DownloadOptions options,
         IProgress<string> log,
-        IProgress<int> progress,
+        IProgress<DownloadProgressInfo> progress,
         CancellationToken ct)
     {
-        await _tools.EnsureYtDlpAsync(log, ct);
-        await _tools.EnsureFfmpegAsync(log, ct);
-
+        _tools.TemporaryDirectory = options.TemporaryDirectory;
         Directory.CreateDirectory(options.OutputDirectory);
+        Directory.CreateDirectory(options.TemporaryDirectory);
 
-        int lastExit = 0;
-        for (int i = 0; i < urls.Count; i++)
+        progress.Report(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando componentes"));
+        log.Report("Preparando componentes...");
+        await _tools.EnsureAllAsync(log, ct);
+
+        var hadErrors = false;
+        for (var i = 0; i < urls.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
-            log.Report($"\r\n=== Item {i + 1}/{urls.Count} ===");
-            lastExit = await RunOneAsync(urls[i], options, log, progress, ct);
-            if (lastExit != 0)
-                log.Report($"Falha no item {i + 1} (código {lastExit}). Continuando a fila...");
+            var itemIndex = i + 1;
+            log.Report($"\r\n=== Item {itemIndex}/{urls.Count} ===");
+            progress.Report(new DownloadProgressInfo(itemIndex, urls.Count, 0, "", "", "", "Analisando link"));
+
+            var exitCode = await RunOneAsync(urls[i], options, itemIndex, urls.Count, log, progress, ct);
+            if (exitCode != 0)
+            {
+                hadErrors = true;
+                log.Report($"Falha no item {itemIndex} (código {exitCode}).");
+                ReportFriendlyHint(urls[i], options, log);
+            }
         }
 
-        return lastExit;
+        return hadErrors ? 1 : 0;
     }
 
-    private async Task<int> RunOneAsync(string url, DownloadOptions options, IProgress<string> log, IProgress<int> progress, CancellationToken ct)
+    private async Task<int> RunOneAsync(
+        string url,
+        DownloadOptions options,
+        int itemIndex,
+        int itemCount,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
     {
         var args = BuildArguments(url, options);
         var psi = new ProcessStartInfo
@@ -62,11 +83,12 @@ public sealed class YtDlpRunner
             WorkingDirectory = options.OutputDirectory
         };
 
-        foreach (var arg in args) psi.ArgumentList.Add(arg);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => HandleLine(e.Data, log, progress);
-        _process.ErrorDataReceived += (_, e) => HandleLine(e.Data, log, progress);
+        _process.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress);
+        _process.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress);
 
         log.Report($"URL: {url}");
         _process.Start();
@@ -75,19 +97,64 @@ public sealed class YtDlpRunner
 
         using var reg = ct.Register(Stop);
         await _process.WaitForExitAsync(ct);
-        progress.Report(_process.ExitCode == 0 ? 100 : 0);
+        await Task.Delay(80, CancellationToken.None);
+
+        if (_process.ExitCode == 0)
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Concluído"));
+
         return _process.ExitCode;
     }
 
-    private void HandleLine(string? line, IProgress<string> log, IProgress<int> progress)
+    private static void HandleLine(
+        string? rawLine,
+        int itemIndex,
+        int itemCount,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress)
     {
-        if (string.IsNullOrWhiteSpace(line)) return;
+        if (string.IsNullOrWhiteSpace(rawLine)) return;
+        var line = AnsiRegex.Replace(rawLine, string.Empty).TrimEnd();
+
+        if (line.StartsWith(ProgressPrefix, StringComparison.Ordinal))
+        {
+            var payload = line[ProgressPrefix.Length..];
+            var parts = payload.Split('|', 4);
+            var percent = ParsePercent(parts.ElementAtOrDefault(0));
+            var speed = CleanMetric(parts.ElementAtOrDefault(1));
+            var eta = CleanMetric(parts.ElementAtOrDefault(2));
+            var title = parts.ElementAtOrDefault(3)?.Trim() ?? string.Empty;
+
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, percent, speed, eta, title, "Baixando"));
+            return;
+        }
+
         log.Report(line);
 
-        var m = PercentRegex.Match(line);
-        if (!m.Success) return;
-        if (double.TryParse(m.Groups["p"].Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
-            progress.Report(Math.Clamp((int)Math.Round(value), 0, 100));
+        var match = PercentRegex.Match(line);
+        if (match.Success && double.TryParse(
+                match.Groups["p"].Value.Replace(',', '.'),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var fallbackPercent))
+        {
+            progress.Report(new DownloadProgressInfo(
+                itemIndex,
+                itemCount,
+                Math.Clamp(fallbackPercent, 0, 100),
+                "",
+                "",
+                "",
+                "Baixando"));
+        }
+        else if (line.Contains("[ExtractAudio]", StringComparison.OrdinalIgnoreCase))
+        {
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Convertendo áudio"));
+        }
+        else if (line.Contains("[Merger]", StringComparison.OrdinalIgnoreCase) ||
+                 line.Contains("[VideoRemuxer]", StringComparison.OrdinalIgnoreCase))
+        {
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Finalizando vídeo"));
+        }
     }
 
     private IEnumerable<string> BuildArguments(string url, DownloadOptions o)
@@ -95,21 +162,34 @@ public sealed class YtDlpRunner
         var args = new List<string>
         {
             "--newline",
-            "--no-warnings",
             "--windows-filenames",
+            "--continue",
+            "--retries", "5",
+            "--fragment-retries", "5",
             "--ffmpeg-location", _tools.ToolsDirectory,
+            "--js-runtimes", $"deno:{_tools.DenoPath}",
+            "--progress-template", "download:PLUTAO_PROGRESS|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.title)s",
             "-P", o.OutputDirectory,
+            "-P", $"temp:{o.TemporaryDirectory}",
             "-o", "%(uploader)s/%(title)s [%(id)s].%(ext)s"
         };
 
-        if (!o.AllowPlaylists) args.Add("--no-playlist");
-        if (o.EmbedMetadata) args.Add("--embed-metadata");
+        if (!o.AllowPlaylists)
+            args.Add("--no-playlist");
+
+        if (o.EmbedMetadata)
+            args.Add("--embed-metadata");
+
         if (o.SaveThumbnail)
         {
             args.Add("--write-thumbnail");
-            args.Add("--convert-thumbnails"); args.Add("jpg");
+            args.Add("--convert-thumbnails");
+            args.Add("jpg");
         }
-        if (o.SaveInfoJson) args.Add("--write-info-json");
+
+        if (o.SaveInfoJson)
+            args.Add("--write-info-json");
+
         if (o.UseArchive)
         {
             args.Add("--download-archive");
@@ -125,29 +205,87 @@ public sealed class YtDlpRunner
         if (o.Mode == DownloadMode.Audio)
         {
             args.Add("-x");
-            args.Add("--audio-format"); args.Add(o.AudioFormat);
-            args.Add("--audio-quality"); args.Add("0");
+            args.Add("--audio-format");
+            args.Add(o.AudioFormat);
+            args.Add("--audio-quality");
+            args.Add("0");
         }
         else
         {
-            args.Add("-f"); args.Add(VideoSelector(o.Quality));
-            args.Add("--merge-output-format"); args.Add(o.VideoContainer);
-            args.Add("--remux-video"); args.Add(o.VideoContainer);
+            args.Add("-f");
+            args.Add(VideoSelector(o.Quality, o.VideoContainer));
+            args.Add("--merge-output-format");
+            args.Add(o.VideoContainer);
+
+            if (!string.Equals(o.VideoContainer, "mkv", StringComparison.OrdinalIgnoreCase))
+            {
+                args.Add("--remux-video");
+                args.Add(o.VideoContainer);
+            }
         }
 
         args.Add("--");
-        args.Add(url);
+        args.Add(url.Trim());
         return args;
     }
 
-    private static string VideoSelector(string quality)
+    private static string VideoSelector(string quality, string container)
     {
-        if (quality.Equals("Melhor", StringComparison.OrdinalIgnoreCase))
-            return "bv*+ba/b";
+        int? height = null;
+        if (!quality.Equals("Melhor", StringComparison.OrdinalIgnoreCase))
+        {
+            var digits = new string(quality.TakeWhile(char.IsDigit).ToArray());
+            if (int.TryParse(digits, out var parsed))
+                height = parsed;
+        }
 
-        var h = new string(quality.TakeWhile(char.IsDigit).ToArray());
-        return int.TryParse(h, out var height)
-            ? $"bv*[height<={height}]+ba/b[height<={height}]"
-            : "bv*+ba/b";
+        var limit = height.HasValue ? $"[height<={height.Value}]" : string.Empty;
+
+        if (container.Equals("mp4", StringComparison.OrdinalIgnoreCase))
+            return $"bv*{limit}[ext=mp4]+ba[ext=m4a]/bv*{limit}+ba/b{limit}/b";
+
+        if (container.Equals("webm", StringComparison.OrdinalIgnoreCase))
+            return $"bv*{limit}[ext=webm]+ba[ext=webm]/bv*{limit}+ba/b{limit}/b";
+
+        return $"bv*{limit}+ba/b{limit}/b";
+    }
+
+    private static double ParsePercent(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var match = PercentRegex.Match(text);
+        if (!match.Success) return 0;
+
+        return double.TryParse(
+            match.Groups["p"].Value.Replace(',', '.'),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? Math.Clamp(value, 0, 100)
+            : 0;
+    }
+
+    private static string CleanMetric(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var result = text.Replace("N/A", "", StringComparison.OrdinalIgnoreCase).Trim();
+        return result;
+    }
+
+    private static void ReportFriendlyHint(string url, DownloadOptions options, IProgress<string> log)
+    {
+        if (url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(options.BrowserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+                log.Report("[Dica Instagram] Alguns links exigem uma sessão. Tente selecionar Cookies: Edge, Chrome ou Firefox usando uma conta que tenha acesso ao vídeo.");
+            else
+                log.Report("[Dica Instagram] Se aparecer erro ao ler cookies, feche completamente o navegador selecionado e tente novamente.");
+        }
+
+        if (url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase))
+        {
+            log.Report("[Dica YouTube] O Plutao usa Deno automaticamente para os desafios JavaScript do YouTube. Se falhar, clique em 'Atualizar componentes' e tente novamente.");
+        }
     }
 }
