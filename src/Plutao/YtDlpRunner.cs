@@ -171,7 +171,7 @@ public sealed class YtDlpRunner
             "--progress-template", "download:PLUTAO_PROGRESS|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.title)s",
             "-P", o.OutputDirectory,
             "-P", $"temp:{o.TemporaryDirectory}",
-            "-o", "%(uploader)s/%(title)s [%(id)s].%(ext)s"
+            "-o", OutputTemplate(o.OrganizeByCreator)
         };
 
         if (!o.AllowPlaylists)
@@ -228,6 +228,11 @@ public sealed class YtDlpRunner
         args.Add(url.Trim());
         return args;
     }
+
+    private static string OutputTemplate(bool organizeByCreator)
+        => organizeByCreator
+            ? "%(uploader)s/%(title)s [%(id)s].%(ext)s"
+            : "%(title)s [%(id)s].%(ext)s";
 
     private static string VideoSelector(string quality, string container)
     {

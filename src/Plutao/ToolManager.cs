@@ -20,7 +20,7 @@ public sealed class ToolManager
         TemporaryDirectory = ResolveDefaultTempDirectory();
         Directory.CreateDirectory(ToolsDirectory);
         Directory.CreateDirectory(TemporaryDirectory);
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.2"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.2.1"));
     }
 
     public static string ResolveDefaultTempDirectory()

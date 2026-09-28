@@ -20,4 +20,5 @@ public sealed class DownloadOptions
     public bool SaveThumbnail { get; set; }
     public bool SaveInfoJson { get; set; }
     public bool UseArchive { get; set; } = true;
+    public bool OrganizeByCreator { get; set; }
 }

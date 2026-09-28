@@ -1,57 +1,43 @@
 # Plutao
 
-Downloader de vídeo e áudio para Windows baseado em **yt-dlp + FFmpeg**, com suporte a YouTube, Instagram, TikTok e outras plataformas suportadas pelo yt-dlp.
+Baixador universal de vídeo e áudio para Windows, com interface gráfica e suporte baseado em **yt-dlp + FFmpeg + Deno**.
 
-> Use apenas para conteúdo que você tem autorização para baixar e respeite os termos e direitos aplicáveis de cada serviço.
+> Use apenas para conteúdo que você tem autorização para baixar e respeite os termos/direitos aplicáveis de cada serviço.
 
-## v0.2.0
+## Recursos
 
+- URLs individuais ou várias URLs em fila.
+- Vídeo: Melhor, 2160p, 1440p, 1080p, 720p, 480p e 360p.
+- Contêiner de vídeo: MP4, MKV e WebM.
+- Áudio: MP3, M4A, AAC, FLAC, WAV e Opus.
+- Pastas separadas para **Vídeos** e **Áudios**.
+- Opção **Organizar por canal/criador** ativável/desativável.
+- Playlists, canais e perfis quando habilitado e suportado pelo yt-dlp.
+- Cookies do Edge, Chrome ou Firefox para conteúdo que exija sua própria sessão.
+- Miniatura, metadados e JSON opcionais.
+- Histórico para evitar downloads repetidos.
+- Atualização automática/manual de yt-dlp, FFmpeg e Deno.
+- Barra de progresso com porcentagem, velocidade, ETA, item atual e etapa.
 - Tema preto.
-- Barra de progresso visível com porcentagem, item atual, velocidade e ETA.
-- Status de etapas: preparando, analisando, baixando, convertendo e finalizando.
-- Deno instalado automaticamente para suporte completo ao YouTube atual.
-- yt-dlp, FFmpeg e Deno podem ser atualizados pelo botão **Atualizar componentes**.
-- Pasta de temporários configurável; no PC de desenvolvimento usa por padrão `C:\PROJETOS\Plutao-\Teporarios`.
-- Melhor tratamento de MP4 e fallback de formatos.
-- Mensagens de ajuda específicas para YouTube e Instagram quando um link falha.
-- Correção de DPI/escala para evitar controles cortados.
 
-## Formatos
+## Organização dos arquivos
 
-### Vídeo
+Com **Organizar por canal/criador** desativado:
 
-- Melhor
-- 2160p
-- 1440p
-- 1080p
-- 720p
-- 480p
-- 360p
-- MP4, MKV e WebM
+`Videos/Nome do vídeo [id].mp4`
 
-### Áudio
+Com a opção ativada:
 
-- MP3
-- M4A
-- AAC
-- FLAC
-- WAV
-- Opus
+`Videos/Nome do criador/Nome do vídeo [id].mp4`
 
-## Cookies
-
-Para conteúdo público, comece com **Nenhum**. Em plataformas que exijam a sua própria sessão, selecione Edge, Chrome ou Firefox. O Plutao apenas usa cookies da sessão local do navegador selecionado; ele não contorna acesso que a sua conta não possui.
+O mesmo comportamento vale para a pasta de áudios.
 
 ## Como compilar
 
 Requer Windows 10/11 e .NET 8 SDK x64.
 
-Execute:
+Execute `build-release.bat`. O resultado ficará em:
 
-`build-release.bat`
-
-O executável será criado em:
-
-`release\Plutao.exe`
+`release/Plutao.exe`
 
 A publicação é `win-x64`, self-contained e single-file.
