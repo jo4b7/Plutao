@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.1
+
+- A análise de perfil não abre mais uma janela separada: perfil, estatísticas e seleção de vídeos aparecem dentro da janela principal.
+- A seleção é aplicada em tempo real; basta marcar/desmarcar vídeos e clicar em **BAIXAR**.
+- O painel de resultados pode ser ocultado sem perder a seleção atual.
+- Miniaturas agora priorizam os primeiros itens visíveis e depois carregam o restante em segundo plano.
+- Aumentada a concorrência de download de miniaturas para acelerar perfis grandes.
+- Cache de miniaturas em memória e em `%LOCALAPPDATA%\\Plutao\\thumb-cache` por até 7 dias; reabrir o mesmo perfil fica muito mais rápido.
+- Imagens são reduzidas ao tamanho da interface logo após o download para diminuir uso de RAM e travamentos com centenas de vídeos.
+- Conexões HTTP de miniaturas são reutilizadas e otimizadas; CDN do Instagram recebe `Referer` apropriado quando necessário.
+- Estatísticas com valor zero não são mais exibidas como se fossem dados reais quando a plataforma não informou o valor.
+
 ## 0.4.0
 
 - Tela de análise agora mostra um cabeçalho do perfil com foto, nome, @usuário e plataforma.

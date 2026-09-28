@@ -44,6 +44,7 @@ public sealed class MainForm : Form
     private readonly Button btnToggleLog = new() { Text = "MOSTRAR LOG", AutoSize = true };
     private readonly GroupBox grpAdvanced = new();
     private readonly GroupBox grpLog = new();
+    private readonly ProfileSelectionPanel profileSelection = new();
     private readonly Button btnAnalyzeCollection = new() { Text = "VER / ANALISAR PERFIL", AutoSize = true };
     private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
     private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
@@ -108,7 +109,7 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = new Padding(12),
             ColumnCount = 1,
-            RowCount = 8,
+            RowCount = 9,
             BackColor = Bg
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -217,6 +218,11 @@ public sealed class MainForm : Form
 
         mainOptions.Controls.Add(opts);
         root.Controls.Add(mainOptions);
+
+        // Resultado da análise fica dentro da própria janela. Não abre mais uma janela separada.
+        profileSelection.Name = "profileSelection";
+        profileSelection.Visible = false;
+        root.Controls.Add(profileSelection);
 
         // Opções menos usadas ficam recolhidas para limpar a tela principal.
         grpAdvanced.Text = "Opções avançadas";
@@ -386,6 +392,7 @@ public sealed class MainForm : Form
         SetNamedHeight("grpProgress", compact ? 86 : roomy ? 112 : 102);
         SetNamedHeight("actionsRow", compact ? 54 : roomy ? 66 : 62);
         SetNamedHeight("grpLog", compact ? 200 : roomy ? 300 : 240);
+        profileSelection.ApplyResponsiveHeight(compact, roomy);
 
         var root = Controls.Find("rootLayout", true).FirstOrDefault();
         if (root is TableLayoutPanel layout)
@@ -498,6 +505,8 @@ public sealed class MainForm : Form
         txtUrls.TextChanged += (_, _) => ResetCollectionSelection();
         btnPaste.Click += (_, _) => { if (Clipboard.ContainsText()) txtUrls.Text = Clipboard.GetText(); };
         btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync();
+        profileSelection.SelectionChanged += (_, _) => ApplyProfileSelection();
+        profileSelection.HideRequested += (_, _) => profileSelection.Visible = false;
 
         btnBrowseVideo.Click += (_, _) => BrowseFolder(txtVideoOutput, "Escolha a pasta dos vídeos");
         btnOpenVideo.Click += (_, _) => OpenFolder(txtVideoOutput.Text);
@@ -566,8 +575,34 @@ public sealed class MainForm : Form
         _analyzedCollectionUrl = null;
         _selectedPlaylistItems = string.Empty;
         _selectedCollectionUrls.Clear();
+        profileSelection.ClearData();
         if (!IsDisposed)
             lblCollectionInfo.Text = "Não analisado";
+    }
+
+    private void ApplyProfileSelection()
+    {
+        if (!profileSelection.HasData || string.IsNullOrWhiteSpace(_analyzedCollectionUrl))
+            return;
+
+        var selectedItems = profileSelection.SelectedItems.OrderBy(x => x.Index).ToArray();
+        _selectedPlaylistItems = string.Empty;
+        _selectedCollectionUrls.Clear();
+
+        if (selectedItems.Length > 0)
+        {
+            if (selectedItems.All(item => !string.IsNullOrWhiteSpace(item.Url)))
+            {
+                _selectedCollectionUrls.AddRange(
+                    selectedItems.Select(item => item.Url).Distinct(StringComparer.OrdinalIgnoreCase));
+            }
+            else
+            {
+                _selectedPlaylistItems = string.Join(",", selectedItems.Select(item => item.Index));
+            }
+        }
+
+        lblCollectionInfo.Text = $"{profileSelection.TotalItems} encontrados • {selectedItems.Length} selecionados";
     }
 
     private async Task AnalyzeCollectionAsync()
@@ -613,35 +648,13 @@ public sealed class MainForm : Form
                 return;
             }
 
-            using var picker = new CollectionPickerForm(items, _runner.LastAnalyzedProfile);
-            if (picker.ShowDialog(this) == DialogResult.OK)
-            {
-                var selectedItems = picker.SelectedItems.OrderBy(x => x.Index).ToArray();
-                _analyzedCollectionUrl = urls[0];
-                _selectedPlaylistItems = string.Empty;
-                _selectedCollectionUrls.Clear();
+            _analyzedCollectionUrl = urls[0];
+            profileSelection.LoadData(items, _runner.LastAnalyzedProfile);
+            ApplyResponsiveSpacing();
+            ApplyProfileSelection();
 
-                // Alguns analisadores (como o fallback de perfis do Instagram)
-                // devolvem URLs individuais. Nesse caso o Plutao baixa exatamente
-                // os itens marcados, sem depender do extrator de perfil do yt-dlp.
-                if (selectedItems.All(item => !string.IsNullOrWhiteSpace(item.Url)))
-                {
-                    _selectedCollectionUrls.AddRange(
-                        selectedItems.Select(item => item.Url).Distinct(StringComparer.OrdinalIgnoreCase));
-                }
-                else
-                {
-                    _selectedPlaylistItems = string.Join(",", selectedItems.Select(item => item.Index));
-                }
-
-                lblCollectionInfo.Text = $"{items.Count} encontrados • {selectedItems.Length} selecionados";
-                AppendLog($"[Análise] {items.Count} encontrados; {selectedItems.Length} selecionados para download.");
-            }
-            else
-            {
-                lblCollectionInfo.Text = $"{items.Count} encontrados • seleção cancelada";
-                AppendLog($"[Análise] {items.Count} encontrados; seleção cancelada.");
-            }
+            lblCollectionInfo.Text = $"{items.Count} encontrados • {items.Count} selecionados";
+            AppendLog($"[Análise] {items.Count} encontrados; seleção exibida na tela principal.");
 
             lblStatus.Text = "Análise concluída";
             lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
@@ -685,9 +698,17 @@ public sealed class MainForm : Form
             return;
         }
 
-        var usingSelectedUrls = chkPlaylist.Checked && urls.Count == 1 &&
-                                string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal) &&
-                                _selectedCollectionUrls.Count > 0;
+        var sameAnalyzedProfile = chkPlaylist.Checked && urls.Count == 1 &&
+                                  string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal) &&
+                                  profileSelection.HasData;
+
+        if (sameAnalyzedProfile && profileSelection.SelectedItems.Count == 0)
+        {
+            MessageBox.Show(this, "Selecione pelo menos um vídeo do perfil antes de baixar.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var usingSelectedUrls = sameAnalyzedProfile && _selectedCollectionUrls.Count > 0;
         var downloadUrls = usingSelectedUrls ? _selectedCollectionUrls.ToList() : urls;
 
         var selectedOutput = rbVideo.Checked ? txtVideoOutput.Text.Trim() : txtAudioOutput.Text.Trim();
@@ -708,8 +729,7 @@ public sealed class MainForm : Form
             BrowserCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
             AllowPlaylists = usingSelectedUrls ? false : chkPlaylist.Checked,
             CollectionLimit = SelectedCollectionLimit(),
-            SelectedPlaylistItems = !usingSelectedUrls && chkPlaylist.Checked && urls.Count == 1 &&
-                                    string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal)
+            SelectedPlaylistItems = !usingSelectedUrls && sameAnalyzedProfile
                 ? _selectedPlaylistItems
                 : string.Empty,
             EmbedMetadata = chkMetadata.Checked,

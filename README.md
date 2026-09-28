@@ -36,7 +36,7 @@ Pastas padrão desta instalação:
 - Áudios: `E:\[MUSICAS]`
 ## Visualização de perfil
 
-Ao usar **VER / ANALISAR PERFIL**, o Plutao abre uma tela de seleção com informações gerais da conta quando disponíveis:
+Ao usar **VER / ANALISAR PERFIL**, o Plutao mostra as informações e a seleção de vídeos **dentro da própria janela principal**, sem abrir outra janela:
 
 - foto do perfil;
 - nome e @usuário;
@@ -48,3 +48,8 @@ Ao usar **VER / ANALISAR PERFIL**, o Plutao abre uma tela de seleção com infor
 
 As miniaturas são opcionais: se a CDN da plataforma bloquear uma imagem, a seleção e o download continuam funcionando normalmente.
 
+
+
+### Desempenho das miniaturas
+
+Na v0.4.1, as primeiras miniaturas da lista são priorizadas e o restante é carregado em paralelo em segundo plano. As imagens ficam em cache por até 7 dias em `%LOCALAPPDATA%\Plutao\thumb-cache`, então reabrir um perfil já analisado tende a ser quase instantâneo. As imagens também são redimensionadas antes de permanecerem na memória para reduzir consumo de RAM em perfis com centenas de vídeos.
