@@ -213,7 +213,7 @@ public sealed class YtDlpRunner
         else
         {
             args.Add("-f");
-            args.Add(VideoSelector(o.Quality, o.VideoContainer));
+            args.Add(VideoSelector(o.Quality, o.VideoContainer, o.PreferCompatibleMp4));
             args.Add("--merge-output-format");
             args.Add(o.VideoContainer);
 
@@ -234,7 +234,7 @@ public sealed class YtDlpRunner
             ? "%(uploader)s/%(title)s [%(id)s].%(ext)s"
             : "%(title)s [%(id)s].%(ext)s";
 
-    private static string VideoSelector(string quality, string container)
+    private static string VideoSelector(string quality, string container, bool preferCompatibleMp4)
     {
         int? height = null;
         if (!quality.Equals("Melhor", StringComparison.OrdinalIgnoreCase))
@@ -247,7 +247,17 @@ public sealed class YtDlpRunner
         var limit = height.HasValue ? $"[height<={height.Value}]" : string.Empty;
 
         if (container.Equals("mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            if (preferCompatibleMp4)
+            {
+                // Prioriza H.264/AVC + AAC/M4A para máxima compatibilidade com
+                // Windows, TVs, celulares e editores. Não cai silenciosamente
+                // para AV1/VP9 quando esta opção está ativa.
+                return $"bv[vcodec^=avc1]{limit}+ba[acodec^=mp4a]/b[vcodec^=avc1]{limit}";
+            }
+
             return $"bv*{limit}[ext=mp4]+ba[ext=m4a]/bv*{limit}+ba/b{limit}/b";
+        }
 
         if (container.Equals("webm", StringComparison.OrdinalIgnoreCase))
             return $"bv*{limit}[ext=webm]+ba[ext=webm]/bv*{limit}+ba/b{limit}/b";

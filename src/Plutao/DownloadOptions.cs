@@ -21,4 +21,5 @@ public sealed class DownloadOptions
     public bool SaveInfoJson { get; set; }
     public bool UseArchive { get; set; } = true;
     public bool OrganizeByCreator { get; set; }
+    public bool PreferCompatibleMp4 { get; set; } = true;
 }

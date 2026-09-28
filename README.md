@@ -4,6 +4,8 @@ Baixador universal de vídeo e áudio para Windows, com interface gráfica e sup
 
 > Use apenas para conteúdo que você tem autorização para baixar e respeite os termos/direitos aplicáveis de cada serviço.
 
+- MP4 compatível: opção padrão para priorizar H.264/AVC + AAC e evitar arquivos AV1 incompatíveis com alguns players do Windows.
+
 ## Recursos
 
 - URLs individuais ou várias URLs em fila.

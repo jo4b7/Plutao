@@ -26,6 +26,7 @@ public sealed class MainForm : Form
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
     private readonly CheckBox chkJson = new() { Text = "Salvar info JSON", AutoSize = true };
     private readonly CheckBox chkArchive = new() { Text = "Evitar downloads repetidos", Checked = true, AutoSize = true };
+    private readonly CheckBox chkCompatibleMp4 = new() { Text = "MP4 compatível (H.264/AAC)", Checked = true, AutoSize = true };
 
     private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 44 };
     private readonly Button btnStop = new() { Text = "PARAR", Height = 44, Enabled = false };
@@ -175,6 +176,7 @@ public sealed class MainForm : Form
         checks.Controls.Add(chkThumb);
         checks.Controls.Add(chkJson);
         checks.Controls.Add(chkArchive);
+        checks.Controls.Add(chkCompatibleMp4);
         opts.Controls.Add(checks, 0, 4);
         opts.SetColumnSpan(checks, 4);
 
@@ -261,6 +263,7 @@ public sealed class MainForm : Form
         txtTemp.Text = _tools.TemporaryDirectory;
 
         chkOrganize.Checked = false;
+        chkCompatibleMp4.Checked = true;
         progress.Value = 0;
         progress.DisplayText = "0%";
         UpdateModeUi();
@@ -270,6 +273,7 @@ public sealed class MainForm : Form
     {
         rbVideo.CheckedChanged += (_, _) => UpdateModeUi();
         rbAudio.CheckedChanged += (_, _) => UpdateModeUi();
+        cmbVideoFormat.SelectedIndexChanged += (_, _) => UpdateModeUi();
         btnPaste.Click += (_, _) => { if (Clipboard.ContainsText()) txtUrls.Text = Clipboard.GetText(); };
 
         btnBrowseVideo.Click += (_, _) => BrowseFolder(txtVideoOutput, "Escolha a pasta dos vídeos");
@@ -290,6 +294,7 @@ public sealed class MainForm : Form
         cmbQuality.Enabled = rbVideo.Checked;
         cmbVideoFormat.Enabled = rbVideo.Checked;
         cmbAudioFormat.Enabled = rbAudio.Checked;
+        chkCompatibleMp4.Enabled = rbVideo.Checked && string.Equals(cmbVideoFormat.SelectedItem?.ToString(), "mp4", StringComparison.OrdinalIgnoreCase);
 
         txtVideoOutput.ForeColor = rbVideo.Checked ? TextMain : TextMuted;
         txtAudioOutput.ForeColor = rbAudio.Checked ? TextMain : TextMuted;
@@ -358,7 +363,8 @@ public sealed class MainForm : Form
             SaveThumbnail = chkThumb.Checked,
             SaveInfoJson = chkJson.Checked,
             UseArchive = chkArchive.Checked,
-            OrganizeByCreator = chkOrganize.Checked
+            OrganizeByCreator = chkOrganize.Checked,
+            PreferCompatibleMp4 = chkCompatibleMp4.Checked
         };
 
         _tools.TemporaryDirectory = options.TemporaryDirectory;
@@ -368,6 +374,8 @@ public sealed class MainForm : Form
         AppendLog($"Iniciando {urls.Count} link(s)...");
         AppendLog($"Destino: {options.OutputDirectory}");
         AppendLog($"Organização por canal/criador: {(options.OrganizeByCreator ? "ativada" : "desativada")}");
+        if (options.Mode == DownloadMode.Video && string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase))
+            AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "H.264/AAC" : "melhor codec disponível")}");
 
         try
         {
