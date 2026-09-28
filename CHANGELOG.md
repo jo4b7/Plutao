@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4
+
+- Interface principal mais compacta sem mudar o tema visual.
+- Opções menos usadas foram movidas para **Opções avançadas**, recolhidas por padrão.
+- Log agora pode ser mostrado/ocultado e abre automaticamente quando há erro.
+- Controles de formato usam layout responsivo e quebram de linha em vez de ficarem cortados.
+- Janela principal agora cabe melhor em monitores HD/1366x768.
+- Ajuste automático ao mover entre monitores com DPI/resoluções diferentes.
+- Área principal ganhou rolagem apenas quando realmente necessária.
+- Tela de seleção de vídeos também recebeu ajustes de DPI e tamanho mínimo.
+
 ## 0.3.3
 
 - Corrige MP4 do Instagram/TikTok que podia terminar em VP9/AV1 mesmo com “MP4 compatível” ativado.

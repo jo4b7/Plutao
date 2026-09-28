@@ -31,11 +31,12 @@ public sealed class CollectionPickerForm : Form
     {
         _items = items;
         Text = "Plutao - Selecionar vídeos";
-        Width = 860;
-        Height = 650;
-        MinimumSize = new Size(620, 450);
+        Width = 800;
+        Height = 560;
+        MinimumSize = new Size(560, 400);
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Segoe UI", 10F);
+        AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = Color.FromArgb(10, 10, 10);
         ForeColor = Color.FromArgb(240, 240, 240);
 
@@ -79,6 +80,7 @@ public sealed class CollectionPickerForm : Form
             button.ForeColor = Color.FromArgb(240, 240, 240);
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderColor = Color.FromArgb(62, 62, 62);
+            button.MinimumSize = new Size(110, 32);
         }
 
         _all.Click += (_, _) => SetAll(true);
@@ -97,7 +99,18 @@ public sealed class CollectionPickerForm : Form
         _cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         AcceptButton = _ok;
         CancelButton = _cancel;
+        Shown += (_, _) => FitToCurrentScreen();
+        DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
         UpdateSummary();
+    }
+
+    private void FitToCurrentScreen()
+    {
+        if (!IsHandleCreated || WindowState != FormWindowState.Normal) return;
+        var area = Screen.FromControl(this).WorkingArea;
+        var width = Math.Min(Width, Math.Max(MinimumSize.Width, area.Width - 24));
+        var height = Math.Min(Height, Math.Max(MinimumSize.Height, area.Height - 24));
+        if (width != Width || height != Height) Size = new Size(width, height);
     }
 
     private void SetAll(bool value)

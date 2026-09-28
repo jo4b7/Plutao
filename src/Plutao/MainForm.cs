@@ -40,6 +40,10 @@ public sealed class MainForm : Form
     private readonly Button btnBrowseTemp = new() { Text = "Procurar" };
     private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
     private readonly Button btnClearLog = new() { Text = "Limpar log" };
+    private readonly Button btnAdvanced = new() { Text = "OPÇÕES AVANÇADAS", AutoSize = true };
+    private readonly Button btnToggleLog = new() { Text = "MOSTRAR LOG", AutoSize = true };
+    private readonly GroupBox grpAdvanced = new();
+    private readonly GroupBox grpLog = new();
     private readonly Button btnAnalyzeCollection = new() { Text = "ANALISAR CONTA/PÁGINA", AutoSize = true };
     private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
     private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
@@ -53,6 +57,8 @@ public sealed class MainForm : Form
     private string? _analyzedCollectionUrl;
     private string _selectedPlaylistItems = string.Empty;
     private readonly List<string> _selectedCollectionUrls = new();
+    private bool _advancedVisible;
+    private bool _logVisible;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
     private static readonly Color Panel = Color.FromArgb(18, 18, 18);
@@ -67,9 +73,9 @@ public sealed class MainForm : Form
         _runner = new YtDlpRunner(_tools);
 
         Text = "Plutao - Downloader Universal";
-        Width = 1060;
-        Height = 860;
-        MinimumSize = new Size(920, 720);
+        Width = 1080;
+        Height = 700;
+        MinimumSize = new Size(820, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -84,95 +90,99 @@ public sealed class MainForm : Form
 
     private void BuildUi()
     {
-        var root = new TableLayoutPanel
+        // O painel externo permite que a interface continue utilizável em telas
+        // menores sem esmagar controles. Em telas grandes ele não mostra rolagem.
+        var scrollHost = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(16),
-            ColumnCount = 1,
-            RowCount = 7,
+            AutoScroll = true,
             BackColor = Bg
         };
+        Controls.Add(scrollHost);
 
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 95));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        Controls.Add(root);
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(12),
+            ColumnCount = 1,
+            RowCount = 8,
+            BackColor = Bg
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 0; i < root.RowCount; i++)
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        scrollHost.Controls.Add(root);
 
-        var urlBox = CreateGroup("Links (um por linha)", fill: true);
-        var urlLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(10) };
+        // Links: mantém a área grande, mas um pouco mais compacta.
+        var urlBox = CreateGroup("Links (um por linha)");
+        urlBox.AutoSize = false;
+        urlBox.Height = 125;
+        var urlLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(8)
+        };
         urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
+        urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
         txtUrls.Dock = DockStyle.Fill;
         btnPaste.Dock = DockStyle.Top;
-        btnPaste.Height = 34;
+        btnPaste.Height = 32;
         urlLayout.Controls.Add(txtUrls, 0, 0);
         urlLayout.Controls.Add(btnPaste, 1, 0);
         urlBox.Controls.Add(urlLayout);
         root.Controls.Add(urlBox);
 
+        // Formato usa FlowLayout: quando a largura/DPI muda, os controles quebram
+        // de linha em vez de ficarem espremidos ou cortados.
         var formatBox = CreateGroup("Formato");
-        var format = new TableLayoutPanel
+        var format = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            ColumnCount = 8,
-            Padding = new Padding(10)
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            Padding = new Padding(8, 7, 8, 7)
         };
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        format.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
-
-        format.Controls.Add(rbVideo, 0, 0);
-        format.Controls.Add(rbAudio, 1, 0);
-        format.Controls.Add(LabelFor("Qualidade:"), 2, 0);
-        format.Controls.Add(cmbQuality, 3, 0);
-        format.Controls.Add(LabelFor("Contêiner:"), 4, 0);
-        format.Controls.Add(cmbVideoFormat, 5, 0);
-        format.Controls.Add(LabelFor("Áudio:"), 6, 0);
-        format.Controls.Add(cmbAudioFormat, 7, 0);
-        SetFill(cmbQuality, cmbVideoFormat, cmbAudioFormat);
+        rbVideo.Margin = new Padding(4, 6, 8, 4);
+        rbAudio.Margin = new Padding(4, 6, 18, 4);
+        cmbQuality.Width = 145;
+        cmbVideoFormat.Width = 135;
+        cmbAudioFormat.Width = 165;
+        format.Controls.Add(rbVideo);
+        format.Controls.Add(rbAudio);
+        format.Controls.Add(LabelFor("Qualidade:"));
+        format.Controls.Add(cmbQuality);
+        format.Controls.Add(LabelFor("Contêiner:"));
+        format.Controls.Add(cmbVideoFormat);
+        format.Controls.Add(LabelFor("Áudio:"));
+        format.Controls.Add(cmbAudioFormat);
         formatBox.Controls.Add(format);
         root.Controls.Add(formatBox);
 
-        var optsBox = CreateGroup("Destino e opções");
+        // Na tela principal ficam apenas as escolhas usadas o tempo todo.
+        var mainOptions = CreateGroup("Destino e conta/página");
         var opts = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 4,
-            RowCount = 8,
-            Padding = new Padding(10)
+            RowCount = 4,
+            Padding = new Padding(8)
         };
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         opts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
-        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
+        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
+        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
 
         AddFolderRow(opts, 0, "Vídeos:", txtVideoOutput, btnBrowseVideo, btnOpenVideo);
         AddFolderRow(opts, 1, "Áudios:", txtAudioOutput, btnBrowseAudio, btnOpenAudio);
 
-        opts.Controls.Add(LabelFor("Temporários:"), 0, 2);
-        txtTemp.Dock = DockStyle.Fill;
-        opts.Controls.Add(txtTemp, 1, 2);
-        btnBrowseTemp.Dock = DockStyle.Fill;
-        opts.Controls.Add(btnBrowseTemp, 2, 2);
-        opts.SetColumnSpan(btnBrowseTemp, 2);
-
-        opts.Controls.Add(LabelFor("Cookies:"), 0, 3);
-        cmbCookies.Width = 160;
-        opts.Controls.Add(cmbCookies, 1, 3);
-
-        opts.Controls.Add(LabelFor("Página/conta:"), 0, 4);
-        opts.Controls.Add(chkPlaylist, 1, 4);
+        opts.Controls.Add(LabelFor("Conta/página:"), 0, 2);
+        opts.Controls.Add(chkPlaylist, 1, 2);
         var collectionLimitPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -182,12 +192,12 @@ public sealed class MainForm : Form
             Margin = new Padding(0)
         };
         collectionLimitPanel.Controls.Add(LabelFor("Limite:"));
-        cmbCollectionLimit.Width = 100;
+        cmbCollectionLimit.Width = 90;
         collectionLimitPanel.Controls.Add(cmbCollectionLimit);
-        opts.Controls.Add(collectionLimitPanel, 2, 4);
+        opts.Controls.Add(collectionLimitPanel, 2, 2);
         opts.SetColumnSpan(collectionLimitPanel, 2);
 
-        opts.Controls.Add(LabelFor("Seleção:"), 0, 5);
+        opts.Controls.Add(LabelFor("Seleção:"), 0, 3);
         var collectionSelectPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -198,14 +208,47 @@ public sealed class MainForm : Form
         };
         collectionSelectPanel.Controls.Add(btnAnalyzeCollection);
         collectionSelectPanel.Controls.Add(lblCollectionInfo);
-        opts.Controls.Add(collectionSelectPanel, 1, 5);
+        opts.Controls.Add(collectionSelectPanel, 1, 3);
         opts.SetColumnSpan(collectionSelectPanel, 3);
 
-        opts.Controls.Add(LabelFor("Se já existir:"), 0, 6);
+        mainOptions.Controls.Add(opts);
+        root.Controls.Add(mainOptions);
+
+        // Opções menos usadas ficam recolhidas para limpar a tela principal.
+        grpAdvanced.Text = "Opções avançadas";
+        grpAdvanced.Dock = DockStyle.Top;
+        grpAdvanced.AutoSize = true;
+        grpAdvanced.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        grpAdvanced.Padding = new Padding(4);
+        var advanced = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 3,
+            RowCount = 5,
+            Padding = new Padding(8)
+        };
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
+
+        advanced.Controls.Add(LabelFor("Temporários:"), 0, 0);
+        txtTemp.Dock = DockStyle.Fill;
+        advanced.Controls.Add(txtTemp, 1, 0);
+        btnBrowseTemp.Dock = DockStyle.Fill;
+        advanced.Controls.Add(btnBrowseTemp, 2, 0);
+
+        advanced.Controls.Add(LabelFor("Cookies:"), 0, 1);
+        cmbCookies.Width = 180;
+        cmbCookies.Dock = DockStyle.Left;
+        advanced.Controls.Add(cmbCookies, 1, 1);
+        advanced.SetColumnSpan(cmbCookies, 2);
+
+        advanced.Controls.Add(LabelFor("Se já existir:"), 0, 2);
+        cmbExisting.Width = 240;
         cmbExisting.Dock = DockStyle.Left;
-        cmbExisting.Width = 220;
-        opts.Controls.Add(cmbExisting, 1, 6);
-        opts.SetColumnSpan(cmbExisting, 3);
+        advanced.Controls.Add(cmbExisting, 1, 2);
+        advanced.SetColumnSpan(cmbExisting, 2);
 
         var checks = new FlowLayoutPanel
         {
@@ -213,7 +256,7 @@ public sealed class MainForm : Form
             AutoSize = true,
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
-            Padding = new Padding(0, 6, 0, 0)
+            Padding = new Padding(0, 4, 0, 0)
         };
         checks.Controls.Add(chkOrganize);
         checks.Controls.Add(chkMetadata);
@@ -221,38 +264,53 @@ public sealed class MainForm : Form
         checks.Controls.Add(chkJson);
         checks.Controls.Add(chkArchive);
         checks.Controls.Add(chkCompatibleMp4);
-        opts.Controls.Add(checks, 0, 7);
-        opts.SetColumnSpan(checks, 4);
+        advanced.Controls.Add(checks, 0, 3);
+        advanced.SetColumnSpan(checks, 3);
 
-        optsBox.Controls.Add(opts);
-        root.Controls.Add(optsBox);
+        var advancedActions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Padding = new Padding(0, 4, 0, 0)
+        };
+        advancedActions.Controls.Add(btnUpdate);
+        advancedActions.Controls.Add(btnClearLog);
+        advanced.Controls.Add(advancedActions, 0, 4);
+        advanced.SetColumnSpan(advancedActions, 3);
+        grpAdvanced.Controls.Add(advanced);
+        root.Controls.Add(grpAdvanced);
 
+        // Uma linha pequena concentra comandos de visualização e status.
         var toolsRow = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 4,
-            Padding = new Padding(0, 8, 0, 4)
+            Padding = new Padding(0, 4, 0, 4)
         };
         toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        toolsRow.Controls.Add(btnUpdate, 0, 0);
-        toolsRow.Controls.Add(btnClearLog, 1, 0);
+        toolsRow.Controls.Add(btnAdvanced, 0, 0);
+        toolsRow.Controls.Add(btnToggleLog, 1, 0);
         lblStatus.Anchor = AnchorStyles.Right;
         toolsRow.Controls.Add(lblStatus, 3, 0);
         root.Controls.Add(toolsRow);
 
-        var progressBox = CreateGroup("Progresso", fill: true);
+        var progressBox = CreateGroup("Progresso");
+        progressBox.AutoSize = false;
+        progressBox.Height = 86;
         var progressLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
-            Padding = new Padding(10)
+            Padding = new Padding(8)
         };
-        progressLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        progressLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         progressLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         lblCurrent.ForeColor = TextMuted;
         progressLayout.Controls.Add(lblCurrent, 0, 0);
@@ -260,11 +318,17 @@ public sealed class MainForm : Form
         progressBox.Controls.Add(progressLayout);
         root.Controls.Add(progressBox);
 
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(0, 8, 0, 8) };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        var actions = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 54,
+            ColumnCount = 4,
+            Padding = new Padding(0, 4, 0, 4)
+        };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
         btnDownload.Dock = DockStyle.Fill;
         btnStop.Dock = DockStyle.Fill;
         btnOpenLastFile.Dock = DockStyle.Fill;
@@ -275,10 +339,51 @@ public sealed class MainForm : Form
         actions.Controls.Add(btnOpenLastFolder, 3, 0);
         root.Controls.Add(actions);
 
-        var logBox = CreateGroup("Log", fill: true);
+        grpLog.Text = "Log";
+        grpLog.Dock = DockStyle.Top;
+        grpLog.AutoSize = false;
+        grpLog.Height = 220;
+        grpLog.Padding = new Padding(4);
         txtLog.Dock = DockStyle.Fill;
-        logBox.Controls.Add(txtLog);
-        root.Controls.Add(logBox);
+        grpLog.Controls.Add(txtLog);
+        root.Controls.Add(grpLog);
+
+        SetAdvancedVisible(false);
+        SetLogVisible(false);
+    }
+
+    private void SetAdvancedVisible(bool visible)
+    {
+        _advancedVisible = visible;
+        grpAdvanced.Visible = visible;
+        btnAdvanced.Text = visible ? "OCULTAR OPÇÕES" : "OPÇÕES AVANÇADAS";
+    }
+
+    private void SetLogVisible(bool visible)
+    {
+        _logVisible = visible;
+        grpLog.Visible = visible;
+        btnToggleLog.Text = visible ? "OCULTAR LOG" : "MOSTRAR LOG";
+    }
+
+    private void FitToCurrentScreen()
+    {
+        if (!IsHandleCreated || WindowState != FormWindowState.Normal)
+            return;
+
+        var area = Screen.FromControl(this).WorkingArea;
+        var maxWidth = Math.Max(MinimumSize.Width, area.Width - 24);
+        var maxHeight = Math.Max(MinimumSize.Height, area.Height - 24);
+        var width = Math.Min(Width, maxWidth);
+        var height = Math.Min(Height, maxHeight);
+
+        if (width != Width || height != Height)
+            Size = new Size(width, height);
+
+        var x = Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - Width));
+        var y = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
+        if (x != Left || y != Top)
+            Location = new Point(x, y);
     }
 
     private static void AddFolderRow(TableLayoutPanel layout, int row, string label, TextBox textBox, Button browse, Button open)
@@ -355,6 +460,10 @@ public sealed class MainForm : Form
         btnStop.Click += (_, _) => StopDownload();
         btnUpdate.Click += async (_, _) => await RunToolActionAsync();
         btnClearLog.Click += (_, _) => txtLog.Clear();
+        btnAdvanced.Click += (_, _) => SetAdvancedVisible(!_advancedVisible);
+        btnToggleLog.Click += (_, _) => SetLogVisible(!_logVisible);
+        Shown += (_, _) => FitToCurrentScreen();
+        DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
         btnOpenLastFile.Click += (_, _) => OpenLastFile();
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
         FormClosing += (_, _) => StopDownload();
@@ -448,6 +557,7 @@ public sealed class MainForm : Form
             if (items.Count == 0)
             {
                 lblCollectionInfo.Text = "0 vídeos encontrados";
+                SetLogVisible(true);
                 MessageBox.Show(this, "Nenhum vídeo foi encontrado. Confira o log; alguns perfis exigem Cookies do navegador.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -498,6 +608,7 @@ public sealed class MainForm : Form
             lblStatus.Text = "Erro";
             lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
             lblCurrent.Text = "Não foi possível listar os vídeos.";
+            SetLogVisible(true);
             AppendLog("[Análise] ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -605,6 +716,7 @@ public sealed class MainForm : Form
                 lblStatus.Text = "Concluído com erro";
                 lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
                 lblCurrent.Text = "Um ou mais links falharam. Confira o log.";
+                SetLogVisible(true);
                 AppendLog("Fila concluída com erro(s). Confira as mensagens acima.");
             }
         }
@@ -620,6 +732,7 @@ public sealed class MainForm : Form
             lblStatus.Text = "Erro";
             lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
             lblCurrent.Text = "Erro durante o download.";
+            SetLogVisible(true);
             AppendLog("ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -727,6 +840,7 @@ public sealed class MainForm : Form
         {
             lblStatus.Text = "Erro";
             lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
+            SetLogVisible(true);
             AppendLog("ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -793,6 +907,7 @@ public sealed class MainForm : Form
         btnBrowseAudio.Enabled = !busy;
         btnBrowseTemp.Enabled = !busy;
         btnAnalyzeCollection.Enabled = !busy && chkPlaylist.Checked;
+        btnAdvanced.Enabled = !busy;
         var hasLastFile = !string.IsNullOrWhiteSpace(_runner.LastCompletedFilePath) && File.Exists(_runner.LastCompletedFilePath);
         btnOpenLastFile.Enabled = !busy && hasLastFile;
         btnOpenLastFolder.Enabled = !busy && hasLastFile;

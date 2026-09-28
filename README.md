@@ -20,3 +20,11 @@ Perfis do Instagram são analisados com gallery-dl como fallback e os vídeos se
 ## Compilar
 
 Execute `build-release.bat`. O executável final será criado em `release/Plutao.exe`.
+
+## Interface compacta
+
+A partir da v0.3.4, a tela principal mostra somente os controles usados com frequência.
+Use **Opções avançadas** para temporários, cookies, política de arquivos existentes e opções de metadados/compatibilidade.
+O **Log** também pode ser recolhido para economizar espaço e reaparece automaticamente quando ocorre um erro.
+
+A interface usa DPI Per-Monitor V2, layout responsivo e rolagem de segurança para funcionar melhor ao mover a janela entre monitores QHD/2K e HD.
