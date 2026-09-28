@@ -52,6 +52,7 @@ public sealed class MainForm : Form
 
     private string? _analyzedCollectionUrl;
     private string _selectedPlaylistItems = string.Empty;
+    private readonly List<string> _selectedCollectionUrls = new();
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
     private static readonly Color Panel = Color.FromArgb(18, 18, 18);
@@ -404,6 +405,7 @@ public sealed class MainForm : Form
     {
         _analyzedCollectionUrl = null;
         _selectedPlaylistItems = string.Empty;
+        _selectedCollectionUrls.Clear();
         if (!IsDisposed)
             lblCollectionInfo.Text = "Não analisado";
     }
@@ -453,11 +455,26 @@ public sealed class MainForm : Form
             using var picker = new CollectionPickerForm(items);
             if (picker.ShowDialog(this) == DialogResult.OK)
             {
-                var selected = picker.SelectedIndexes.OrderBy(x => x).ToArray();
+                var selectedItems = picker.SelectedItems.OrderBy(x => x.Index).ToArray();
                 _analyzedCollectionUrl = urls[0];
-                _selectedPlaylistItems = string.Join(",", selected);
-                lblCollectionInfo.Text = $"{items.Count} encontrados • {selected.Length} selecionados";
-                AppendLog($"[Análise] {items.Count} encontrados; {selected.Length} selecionados para download.");
+                _selectedPlaylistItems = string.Empty;
+                _selectedCollectionUrls.Clear();
+
+                // Alguns analisadores (como o fallback de perfis do Instagram)
+                // devolvem URLs individuais. Nesse caso o Plutao baixa exatamente
+                // os itens marcados, sem depender do extrator de perfil do yt-dlp.
+                if (selectedItems.All(item => !string.IsNullOrWhiteSpace(item.Url)))
+                {
+                    _selectedCollectionUrls.AddRange(
+                        selectedItems.Select(item => item.Url).Distinct(StringComparer.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    _selectedPlaylistItems = string.Join(",", selectedItems.Select(item => item.Index));
+                }
+
+                lblCollectionInfo.Text = $"{items.Count} encontrados • {selectedItems.Length} selecionados";
+                AppendLog($"[Análise] {items.Count} encontrados; {selectedItems.Length} selecionados para download.");
             }
             else
             {
@@ -506,6 +523,11 @@ public sealed class MainForm : Form
             return;
         }
 
+        var usingSelectedUrls = chkPlaylist.Checked && urls.Count == 1 &&
+                                string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal) &&
+                                _selectedCollectionUrls.Count > 0;
+        var downloadUrls = usingSelectedUrls ? _selectedCollectionUrls.ToList() : urls;
+
         var selectedOutput = rbVideo.Checked ? txtVideoOutput.Text.Trim() : txtAudioOutput.Text.Trim();
         if (string.IsNullOrWhiteSpace(selectedOutput) || string.IsNullOrWhiteSpace(txtTemp.Text))
         {
@@ -522,9 +544,9 @@ public sealed class MainForm : Form
             OutputDirectory = selectedOutput,
             TemporaryDirectory = txtTemp.Text.Trim(),
             BrowserCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
-            AllowPlaylists = chkPlaylist.Checked,
+            AllowPlaylists = usingSelectedUrls ? false : chkPlaylist.Checked,
             CollectionLimit = SelectedCollectionLimit(),
-            SelectedPlaylistItems = chkPlaylist.Checked && urls.Count == 1 &&
+            SelectedPlaylistItems = !usingSelectedUrls && chkPlaylist.Checked && urls.Count == 1 &&
                                     string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal)
                 ? _selectedPlaylistItems
                 : string.Empty,
@@ -541,7 +563,9 @@ public sealed class MainForm : Form
         _cts = new CancellationTokenSource();
         SetBusy(true);
         SetProgressUi(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando"));
-        AppendLog($"Iniciando {urls.Count} link(s)...");
+        AppendLog($"Iniciando {downloadUrls.Count} link(s)...");
+        if (usingSelectedUrls)
+            AppendLog($"Seleção individual: {downloadUrls.Count} mídia(s) da conta serão baixadas por URL individual.");
         AppendLog($"Destino: {options.OutputDirectory}");
         AppendLog($"Organização por canal/criador: {(options.OrganizeByCreator ? "ativada" : "desativada")}");
         AppendLog(options.AllowPlaylists
@@ -558,7 +582,7 @@ public sealed class MainForm : Form
         try
         {
             var code = await _runner.DownloadAsync(
-                urls,
+                downloadUrls,
                 options,
                 LogProgress(),
                 new Progress<DownloadProgressInfo>(SetProgressUi),

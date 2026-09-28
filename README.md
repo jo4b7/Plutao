@@ -41,3 +41,8 @@ A seleção é aplicada ao link original usando os índices da coleção, então
 
 Requer Windows 10/11 e .NET 8 SDK x64. Execute `build-release.bat`.
 O resultado fica em `release/Plutao.exe`.
+
+
+## Análise de perfis do Instagram
+
+O yt-dlp está com o extrator de perfis do Instagram marcado como quebrado em versões atuais. O Plutao 0.3.2 usa automaticamente o **gallery-dl** como analisador alternativo para listar posts/reels de perfis e depois envia os vídeos selecionados ao yt-dlp por URL individual. O componente é baixado sob demanda. Em alguns perfis o Instagram pode exigir cookies de uma sessão válida; nesse caso selecione Edge, Chrome ou Firefox no campo **Cookies**.

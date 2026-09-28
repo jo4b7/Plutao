@@ -18,11 +18,14 @@ public sealed class CollectionPickerForm : Form
     private readonly Button _ok = new() { Text = "USAR SELECIONADOS", AutoSize = true };
     private readonly Button _cancel = new() { Text = "Cancelar", AutoSize = true };
 
-    public IReadOnlyList<int> SelectedIndexes
+    public IReadOnlyList<CollectionMediaItem> SelectedItems
         => Enumerable.Range(0, _list.Items.Count)
             .Where(i => _list.GetItemChecked(i))
-            .Select(i => _items[i].Index)
+            .Select(i => _items[i])
             .ToArray();
+
+    public IReadOnlyList<int> SelectedIndexes
+        => SelectedItems.Select(item => item.Index).ToArray();
 
     public CollectionPickerForm(IReadOnlyList<CollectionMediaItem> items)
     {

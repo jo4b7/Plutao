@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2
+
+- Corrige o erro interno ao analisar respostas `null` do yt-dlp.
+- Perfis do Instagram usam fallback automático com gallery-dl quando necessário.
+- O fallback lista vídeos/reels e devolve URLs individuais para a seleção.
+- Itens selecionados de perfis do Instagram são baixados individualmente pelo yt-dlp.
+- gallery-dl é baixado automaticamente somente quando o analisador de perfil precisar dele.
+- Mensagens de erro de perfil do Instagram ficaram mais claras, especialmente quando cookies são necessários.
+- `build-release.bat` detecta e fecha `Plutao.exe` antes de recompilar.
+- Mensagem de falha da compilação não culpa mais o .NET em qualquer erro.
+
+
 ## 0.3.1
 
 - Novo botão **ANALISAR CONTA/PÁGINA**.

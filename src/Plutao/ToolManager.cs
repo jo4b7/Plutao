@@ -14,6 +14,7 @@ public sealed class ToolManager
     public string FfmpegPath => Path.Combine(ToolsDirectory, "ffmpeg.exe");
     public string FfprobePath => Path.Combine(ToolsDirectory, "ffprobe.exe");
     public string DenoPath => Path.Combine(ToolsDirectory, "deno.exe");
+    public string GalleryDlPath => Path.Combine(ToolsDirectory, "gallery-dl.exe");
 
     public ToolManager()
     {
@@ -21,7 +22,7 @@ public sealed class ToolManager
         TemporaryDirectory = ResolveDefaultTempDirectory();
         Directory.CreateDirectory(ToolsDirectory);
         Directory.CreateDirectory(TemporaryDirectory);
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.3.1"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.3.2"));
 
         // O HttpClient usa 100 s por padrão. O pacote do FFmpeg pode levar mais
         // que isso em conexões lentas e acabava sendo mostrado como "cancelado".
@@ -61,6 +62,31 @@ public sealed class ToolManager
         await DownloadYtDlpAsync(log, progress, ct);
         await DownloadFfmpegAsync(log, progress, ct);
         await DownloadDenoAsync(log, progress, ct);
+        if (File.Exists(GalleryDlPath))
+            await DownloadGalleryDlAsync(log, progress, ct);
+    }
+
+    public async Task EnsureGalleryDlAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (File.Exists(GalleryDlPath)) return;
+        await DownloadGalleryDlAsync(log, progress, ct);
+    }
+
+    public async Task DownloadGalleryDlAsync(
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
+    {
+        const string url = "https://github.com/gdl-org/builds/releases/latest/download/gallery-dl_windows.exe";
+        log?.Report("[Componentes] Baixando analisador de perfis (gallery-dl)...");
+        var temp = Path.Combine(TemporaryDirectory, "gallery-dl.exe.download");
+        await DownloadFileAsync(url, temp, "Baixando analisador de perfis", progress, ct);
+        File.Move(temp, GalleryDlPath, true);
+        progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "Analisador de perfis pronto"));
+        log?.Report("[Componentes] gallery-dl pronto.");
     }
 
     public async Task EnsureYtDlpAsync(

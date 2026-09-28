@@ -81,6 +81,12 @@ public sealed class YtDlpRunner
         if (string.IsNullOrWhiteSpace(url))
             throw new ArgumentException("Informe o link da página/conta/canal/perfil.", nameof(url));
 
+        // O extrator instagram:user do yt-dlp está quebrado nas versões atuais.
+        // Para perfis do Instagram usamos gallery-dl para listar os posts/reels
+        // e depois baixamos os itens escolhidos individualmente com yt-dlp.
+        if (IsInstagramProfileUrl(url))
+            return await AnalyzeInstagramProfileAsync(url, browserCookies, limit, log, progress, ct);
+
         progress.Report(new DownloadProgressInfo(0, 0, 0, "", "", "", "Preparando análise"));
         log.Report("[Análise] Preparando yt-dlp e Deno...");
         await _tools.EnsureYtDlpAsync(log, progress, ct);
@@ -157,6 +163,18 @@ public sealed class YtDlpRunner
             using var document = JsonDocument.Parse(stdout);
             var root = document.RootElement;
 
+            // --ignore-errors pode fazer o yt-dlp devolver literalmente `null`.
+            // A versão anterior tentava tratar esse valor como objeto e exibia
+            // a exceção interna "target element has type Null".
+            if (root.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                log.Report("[Análise] A plataforma não devolveu uma lista utilizável.");
+                return Array.Empty<CollectionMediaItem>();
+            }
+
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException("A plataforma respondeu em um formato que o Plutao ainda não reconhece.");
+
             if (root.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array)
             {
                 var sequentialIndex = 0;
@@ -164,6 +182,17 @@ public sealed class YtDlpRunner
                 {
                     sequentialIndex++;
                     if (entry.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                        continue;
+
+                    if (entry.ValueKind == JsonValueKind.String)
+                    {
+                        var text = entry.GetString();
+                        if (!string.IsNullOrWhiteSpace(text))
+                            items.Add(new CollectionMediaItem(sequentialIndex, text, CleanDisplayTitle(text), ""));
+                        continue;
+                    }
+
+                    if (entry.ValueKind != JsonValueKind.Object)
                         continue;
 
                     var index = ReadInt(entry, "playlist_index") ?? sequentialIndex;
@@ -188,12 +217,236 @@ public sealed class YtDlpRunner
         }
 
         progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{items.Count} mídia(s) encontrada(s)"));
-        log.Report($"[Análise] Encontrados {items.Count} item(ns)." );
+        log.Report($"[Análise] Encontrados {items.Count} item(ns).");
         return items;
+    }
+
+    private async Task<IReadOnlyList<CollectionMediaItem>> AnalyzeInstagramProfileAsync(
+        string url,
+        string browserCookies,
+        int limit,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
+    {
+        progress.Report(new DownloadProgressInfo(0, 0, 0, "", "", "", "Preparando análise do Instagram"));
+        log.Report("[Análise] Perfil do Instagram detectado.");
+        log.Report("[Análise] Usando analisador alternativo de perfis (gallery-dl)...");
+        await _tools.EnsureGalleryDlAsync(log, progress, ct);
+
+        var profileBase = NormalizeInstagramProfileUrl(url);
+        var targets = new[]
+        {
+            (Label: "Reels", Url: profileBase + "reels/"),
+            (Label: "Posts", Url: profileBase + "posts/")
+        };
+
+        var items = new List<CollectionMediaItem>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var targetIndex = 0; targetIndex < targets.Length; targetIndex++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (limit > 0 && items.Count >= limit)
+                break;
+
+            var target = targets[targetIndex];
+            var stagePercent = targetIndex == 0 ? 20 : 60;
+            progress.Report(new DownloadProgressInfo(0, 0, stagePercent, "", "", "", $"Listando Instagram: {target.Label}"));
+            log.Report($"[Análise/Instagram] Listando {target.Label.ToLowerInvariant()}...");
+
+            var remaining = limit > 0 ? Math.Max(1, limit - items.Count) : 0;
+            var stdout = await RunGalleryDlAnalysisAsync(target.Url, browserCookies, remaining, log, ct);
+            ExtractInstagramVideoItems(stdout, items, seen, limit);
+        }
+
+        if (items.Count == 0)
+        {
+            if (string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "O Instagram não liberou a lista de vídeos desse perfil sem uma sessão. " +
+                    "Selecione Cookies: Edge, Chrome ou Firefox (com o Instagram logado) e tente ANALISAR CONTA/PÁGINA novamente.");
+            }
+
+            throw new InvalidOperationException(
+                "O Instagram não devolveu vídeos para esse perfil. Confira se a conta está acessível no navegador escolhido, " +
+                "clique em Atualizar componentes e tente novamente.");
+        }
+
+        // Reindexa depois da deduplicação de posts/reels.
+        var indexed = items
+            .Take(limit > 0 ? limit : int.MaxValue)
+            .Select((item, index) => item with { Index = index + 1 })
+            .ToArray();
+
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{indexed.Length} vídeo(s) encontrado(s)"));
+        log.Report($"[Análise/Instagram] Encontrados {indexed.Length} vídeo(s) únicos.");
+        return indexed;
+    }
+
+    private async Task<string> RunGalleryDlAnalysisAsync(
+        string url,
+        string browserCookies,
+        int limit,
+        IProgress<string> log,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.GalleryDlPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        var args = new List<string>
+        {
+            "--config-ignore",
+            "--no-colors",
+            "-j"
+        };
+
+        if (limit > 0)
+        {
+            args.Add("-o");
+            args.Add($"max-posts={limit.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (!string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("--cookies-from-browser");
+            args.Add(browserCookies.ToLowerInvariant());
+        }
+
+        args.Add(url);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        _process = new Process { StartInfo = psi };
+        _process.Start();
+        using var reg = ct.Register(Stop);
+        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
+        var stderrTask = _process.StandardError.ReadToEndAsync();
+        await _process.WaitForExitAsync(ct);
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            log.Report("[Análise/Instagram] " + AnsiRegex.Replace(line, string.Empty));
+
+        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+            return string.Empty;
+
+        return stdout;
+    }
+
+    private static void ExtractInstagramVideoItems(
+        string stdout,
+        List<CollectionMediaItem> items,
+        HashSet<string> seen,
+        int limit)
+    {
+        if (string.IsNullOrWhiteSpace(stdout))
+            return;
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return;
+
+            foreach (var message in document.RootElement.EnumerateArray())
+            {
+                if (limit > 0 && items.Count >= limit)
+                    return;
+                if (message.ValueKind != JsonValueKind.Array || message.GetArrayLength() < 3)
+                    continue;
+
+                var parts = message.EnumerateArray().ToArray();
+                if (parts[0].ValueKind != JsonValueKind.Number || !parts[0].TryGetInt32(out var messageType) || messageType != 3)
+                    continue;
+
+                if (parts[1].ValueKind != JsonValueKind.String)
+                    continue;
+                var emittedUrl = parts[1].GetString() ?? string.Empty;
+
+                var metadata = parts[^1];
+                if (metadata.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var videoUrl = ReadString(metadata, "video_url");
+                if (string.IsNullOrWhiteSpace(videoUrl))
+                    continue;
+
+                // Cada vídeo também gera uma mensagem para a miniatura. Mantemos
+                // somente a mensagem do arquivo de vídeo/manifesto.
+                if (!emittedUrl.StartsWith("ytdl:", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(emittedUrl, videoUrl, StringComparison.Ordinal))
+                    continue;
+
+                var shortcode = ReadString(metadata, "post_shortcode")
+                                ?? ReadString(metadata, "shortcode")
+                                ?? ReadString(metadata, "media_id")
+                                ?? string.Empty;
+                var postType = ReadString(metadata, "type") ?? "reel";
+                var postUrl = ReadString(metadata, "post_url");
+                if (string.IsNullOrWhiteSpace(postUrl) && !string.IsNullOrWhiteSpace(shortcode))
+                {
+                    var route = postType.Equals("reel", StringComparison.OrdinalIgnoreCase) ? "reel" : "p";
+                    postUrl = $"https://www.instagram.com/{route}/{shortcode}/";
+                }
+
+                if (string.IsNullOrWhiteSpace(postUrl) || !seen.Add(postUrl))
+                    continue;
+
+                var description = ReadString(metadata, "description");
+                var title = !string.IsNullOrWhiteSpace(description)
+                    ? CleanDisplayTitle(description)
+                    : !string.IsNullOrWhiteSpace(shortcode) ? $"Instagram {shortcode}" : "Vídeo do Instagram";
+
+                items.Add(new CollectionMediaItem(items.Count + 1, shortcode, title, "", postUrl));
+            }
+        }
+        catch (JsonException)
+        {
+            // O stderr já é enviado ao log; um resultado inválido simplesmente
+            // deixa este alvo sem itens e permite tentar o próximo (posts/reels).
+        }
+    }
+
+    private static bool IsInstagramProfileUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+        if (!uri.Host.Equals("instagram.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("www.instagram.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 1)
+            return false;
+
+        return !parts[0].Equals("p", StringComparison.OrdinalIgnoreCase) &&
+               !parts[0].Equals("reel", StringComparison.OrdinalIgnoreCase) &&
+               !parts[0].Equals("reels", StringComparison.OrdinalIgnoreCase) &&
+               !parts[0].Equals("stories", StringComparison.OrdinalIgnoreCase) &&
+               !parts[0].Equals("explore", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeInstagramProfileUrl(string url)
+    {
+        var uri = new Uri(url);
+        var username = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries)[0];
+        return $"https://www.instagram.com/{username}/";
     }
 
     private static string? ReadString(JsonElement element, string property)
     {
+        if (element.ValueKind != JsonValueKind.Object) return null;
         if (!element.TryGetProperty(property, out var value)) return null;
         return value.ValueKind switch
         {
@@ -205,6 +458,7 @@ public sealed class YtDlpRunner
 
     private static int? ReadInt(JsonElement element, string property)
     {
+        if (element.ValueKind != JsonValueKind.Object) return null;
         if (!element.TryGetProperty(property, out var value)) return null;
         if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
         if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)) return number;
@@ -213,6 +467,7 @@ public sealed class YtDlpRunner
 
     private static double? ReadDouble(JsonElement element, string property)
     {
+        if (element.ValueKind != JsonValueKind.Object) return null;
         if (!element.TryGetProperty(property, out var value)) return null;
         if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)) return number;
         if (value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number)) return number;
