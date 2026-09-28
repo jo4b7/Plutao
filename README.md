@@ -45,3 +45,8 @@ Execute `build-release.bat`. O resultado ficará em:
 `release/Plutao.exe`
 
 A publicação é `win-x64`, self-contained e single-file.
+
+
+## Compatibilidade de formatos
+
+A opção **MP4 compatível (H.264/AAC)** evita AV1 no YouTube. Em Instagram, TikTok e outras plataformas, o Plutao usa um seletor MP4 mais flexível para não rejeitar formatos progressivos disponíveis.

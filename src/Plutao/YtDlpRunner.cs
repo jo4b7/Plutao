@@ -262,7 +262,7 @@ public sealed class YtDlpRunner
         else
         {
             args.Add("-f");
-            args.Add(VideoSelector(o.Quality, o.VideoContainer, o.PreferCompatibleMp4));
+            args.Add(VideoSelector(url, o.Quality, o.VideoContainer, o.PreferCompatibleMp4));
             args.Add("--merge-output-format");
             args.Add(o.VideoContainer);
 
@@ -289,7 +289,7 @@ public sealed class YtDlpRunner
             : file;
     }
 
-    private static string VideoSelector(string quality, string container, bool preferCompatibleMp4)
+    private static string VideoSelector(string url, string quality, string container, bool preferCompatibleMp4)
     {
         int? height = null;
         if (!quality.Equals("Melhor", StringComparison.OrdinalIgnoreCase))
@@ -300,19 +300,36 @@ public sealed class YtDlpRunner
         }
 
         var limit = height.HasValue ? $"[height<={height.Value}]" : string.Empty;
+        var isYouTube = url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+                        url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
 
         if (container.Equals("mp4", StringComparison.OrdinalIgnoreCase))
         {
-            if (preferCompatibleMp4)
+            if (preferCompatibleMp4 && isYouTube)
             {
-                return $"bv[vcodec^=avc1]{limit}+ba[acodec^=mp4a]/b[vcodec^=avc1]{limit}";
+                // No YouTube, AV1 em MP4 é comum. Mantemos uma seleção rígida
+                // de H.264/AVC + AAC para máxima compatibilidade com Windows/TVs.
+                return $"bv[vcodec^=avc1]{limit}+ba[acodec^=mp4a]/" +
+                       $"b[vcodec^=avc1]{limit}/" +
+                       "bv[vcodec^=avc1]+ba[acodec^=mp4a]/b[vcodec^=avc1]";
             }
 
-            return $"bv*{limit}[ext=mp4]+ba[ext=m4a]/bv*{limit}+ba/b{limit}/b";
+            if (preferCompatibleMp4)
+            {
+                // Instagram, TikTok e vários outros sites costumam fornecer um
+                // MP4 progressivo (vídeo+áudio juntos) e nem sempre anunciam o
+                // codec como 'avc1'. Priorize MP4 sem exigir o rótulo de codec.
+                return $"b[ext=mp4]{limit}/" +
+                       $"bv*[ext=mp4]{limit}+ba/" +
+                       $"b{limit}/" +
+                       "b[ext=mp4]/b/bv*+ba";
+            }
+
+            return $"bv*{limit}[ext=mp4]+ba[ext=m4a]/b[ext=mp4]{limit}/bv*{limit}+ba/b{limit}/b";
         }
 
         if (container.Equals("webm", StringComparison.OrdinalIgnoreCase))
-            return $"bv*{limit}[ext=webm]+ba[ext=webm]/bv*{limit}+ba/b{limit}/b";
+            return $"bv*{limit}[ext=webm]+ba[ext=webm]/b[ext=webm]{limit}/bv*{limit}+ba/b{limit}/b";
 
         return $"bv*{limit}+ba/b{limit}/b";
     }
