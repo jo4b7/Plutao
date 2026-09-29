@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.2
+
+- Corrige a captura do caminho do arquivo final após o yt-dlp.
+- Se o `after_move` não informar o caminho, o Plutao procura o arquivo pelo sufixo único, ID da mídia e data de modificação.
+- MP4 não é mais marcado como concluído quando o arquivo final não pôde ser localizado e validado.
+- A validação/conversão H.264/HEVC + AAC passa a ser obrigatória antes do sucesso do item.
+- Cache de download da v0.5.1 é invalidado para não reaproveitar arquivos AV1/VP9/Opus não convertidos.
+- Mantém HEVC por AMD AMF em 1440p/2160p com fallback automático para CPU.
+
 ## 0.5.1
 
 - Conversão HEVC de 1440p/2160p tenta usar a GPU AMD via AMF primeiro; em GPUs compatíveis, como a RX 5700 XT, a recodificação fica muito mais rápida.

@@ -2,9 +2,12 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.1 — experiência de aplicativo
+## v0.5.2 — validação final obrigatória
 
 A tela principal foi reorganizada para que o fluxo normal seja simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
+
+A v0.5.2 corrige um caso em que o yt-dlp podia concluir o processo sem o Plutao conseguir capturar o caminho final do arquivo. Agora o aplicativo procura o arquivo final pelo sufixo/ID/data de gravação e **não marca o download como concluído** enquanto não conseguir localizar e validar o MP4. Isso impede que AV1/VP9 + Opus escape sem a conversão automática para H.264/AAC ou HEVC/AAC.
+
 
 - prévia automática de links individuais com título, criador, duração, data de publicação, visualizações e curtidas quando a plataforma fornece;
 - contas/canais/perfis continuam sendo analisados e selecionados dentro da própria janela;

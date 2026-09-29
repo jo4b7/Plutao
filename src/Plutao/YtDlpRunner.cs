@@ -1077,6 +1077,7 @@ public sealed class YtDlpRunner
 
         log.Report($"URL: {url}");
         progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Conectando à plataforma"));
+        var processStartedUtc = DateTime.UtcNow;
         _process.Start();
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
@@ -1088,31 +1089,40 @@ public sealed class YtDlpRunner
         var exitCode = _process.ExitCode;
         var processEndedAt = timing.Total.Elapsed;
         var compatibilityElapsed = TimeSpan.Zero;
+
+        string? completedPath = null;
+        if (exitCode == 0)
+        {
+            completedPath = ResolveCompletedMediaPath(options, url, processStartedUtc, uniqueSuffix);
+            if (string.IsNullOrWhiteSpace(completedPath) || !File.Exists(completedPath))
+            {
+                log.Report("[Arquivo] ERRO: o yt-dlp terminou, mas o Plutao não conseguiu localizar o arquivo final.");
+                log.Report("[Arquivo] O download não será marcado como concluído para evitar entregar um MP4 sem validação de codec.");
+                return 2;
+            }
+
+            _currentCompletedFilePath = completedPath;
+            LastCompletedFilePath = completedPath;
+            log.Report($"[Arquivo final] {completedPath}");
+        }
+
         if (exitCode == 0 && ShouldGuaranteeCompatibleMp4(options))
         {
-            var path = _currentCompletedFilePath ?? LastCompletedFilePath;
-            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            try
             {
-                try
-                {
-                    var compatibilityTimer = Stopwatch.StartNew();
-                    await EnsureCompatibleMp4Async(path, options, itemIndex, itemCount, log, progress, ct);
-                    compatibilityTimer.Stop();
-                    compatibilityElapsed = compatibilityTimer.Elapsed;
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    log.Report("[Compatibilidade] ERRO ao validar/converter o MP4: " + ex.Message);
-                    return 2;
-                }
+                var compatibilityTimer = Stopwatch.StartNew();
+                await EnsureCompatibleMp4Async(completedPath!, options, itemIndex, itemCount, log, progress, ct);
+                compatibilityTimer.Stop();
+                compatibilityElapsed = compatibilityTimer.Elapsed;
             }
-            else
+            catch (OperationCanceledException)
             {
-                log.Report("[Compatibilidade] Não foi possível localizar o arquivo final para validar o codec.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log.Report("[Compatibilidade] ERRO ao validar/converter o MP4: " + ex.Message);
+                return 2;
             }
         }
 
@@ -1151,6 +1161,116 @@ public sealed class YtDlpRunner
         }
 
         return exitCode;
+    }
+
+    private string? ResolveCompletedMediaPath(
+        DownloadOptions options,
+        string url,
+        DateTime processStartedUtc,
+        string uniqueSuffix)
+    {
+        var captured = _currentCompletedFilePath;
+        if (!string.IsNullOrWhiteSpace(captured) && File.Exists(captured))
+            return Path.GetFullPath(captured);
+
+        try
+        {
+            if (!Directory.Exists(options.OutputDirectory))
+                return null;
+
+            var mediaId = ExtractLikelyMediaId(url);
+            var threshold = processStartedUtc.AddSeconds(-5);
+
+            var candidates = Directory.EnumerateFiles(
+                    options.OutputDirectory,
+                    "*",
+                    options.OrganizeByCreator ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+                .Where(IsMediaFile)
+                .Select(path =>
+                {
+                    try
+                    {
+                        var info = new FileInfo(path);
+                        var name = info.Name;
+                        var suffixMatch = !string.IsNullOrWhiteSpace(uniqueSuffix) &&
+                                          name.Contains(uniqueSuffix, StringComparison.OrdinalIgnoreCase);
+                        var idMatch = !string.IsNullOrWhiteSpace(mediaId) &&
+                                      name.Contains($"[{mediaId}]", StringComparison.OrdinalIgnoreCase);
+                        var recent = info.LastWriteTimeUtc >= threshold;
+                        var score = suffixMatch ? 3 : idMatch ? 2 : recent ? 1 : 0;
+                        return new { Path = info.FullName, info.LastWriteTimeUtc, Score = score };
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                })
+                .Where(x => x is not null && x.Score > 0)
+                .OrderByDescending(x => x!.Score)
+                .ThenByDescending(x => x!.LastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (candidates is null)
+                return null;
+
+            logResolvedPath(candidates.Path);
+            return candidates.Path;
+        }
+        catch
+        {
+            return null;
+        }
+
+        void logResolvedPath(string path)
+        {
+            _currentCompletedFilePath = path;
+            LastCompletedFilePath = path;
+        }
+    }
+
+    private static string ExtractLikelyMediaId(string url)
+    {
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            return string.Empty;
+
+        var host = uri.Host.ToLowerInvariant();
+        var parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        if (host.Contains("youtu.be") && parts.Length > 0)
+            return parts[0];
+
+        if (host.Contains("youtube.com"))
+        {
+            if (uri.AbsolutePath.Equals("/watch", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var pair in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var kv = pair.Split('=', 2);
+                    if (kv.Length == 2 && kv[0].Equals("v", StringComparison.OrdinalIgnoreCase))
+                        return Uri.UnescapeDataString(kv[1]);
+                }
+            }
+
+            if (parts.Length >= 2 &&
+                (parts[0].Equals("shorts", StringComparison.OrdinalIgnoreCase) ||
+                 parts[0].Equals("live", StringComparison.OrdinalIgnoreCase)))
+                return parts[1];
+        }
+
+        if (host.Contains("instagram.com") && parts.Length >= 2 &&
+            (parts[0].Equals("p", StringComparison.OrdinalIgnoreCase) ||
+             parts[0].Equals("reel", StringComparison.OrdinalIgnoreCase) ||
+             parts[0].Equals("tv", StringComparison.OrdinalIgnoreCase)))
+            return parts[1];
+
+        for (var i = 0; i + 1 < parts.Length; i++)
+        {
+            if (parts[i].Equals("video", StringComparison.OrdinalIgnoreCase) ||
+                parts[i].Equals("status", StringComparison.OrdinalIgnoreCase))
+                return parts[i + 1];
+        }
+
+        return string.Empty;
     }
 
     private void HandleLine(

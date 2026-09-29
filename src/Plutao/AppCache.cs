@@ -235,7 +235,7 @@ internal static class AppCache
     {
         var raw = string.Join("|", new[]
         {
-            "download-cache-v051-amf1",
+            "download-cache-v052-finalpath1",
             NormalizeUrl(url),
             options.Mode.ToString(),
             options.Quality,
