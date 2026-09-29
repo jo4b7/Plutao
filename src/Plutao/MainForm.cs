@@ -466,10 +466,14 @@ public sealed class MainForm : Form
         cmbCollectionLimit.Items.AddRange(new object[] { "Todos", "10", "25", "50", "100", "200" });
         cmbCollectionLimit.SelectedIndex = 0;
 
-        // Pastas padrão desta instalação. O usuário ainda pode alterá-las
-        // normalmente pelos botões Procurar.
-        txtVideoOutput.Text = @"E:\[VIDEOS]";
-        txtAudioOutput.Text = @"E:\[MUSICAS]";
+        // Destinos de Vídeo e Áudio não são mais presos a nenhum disco.
+        // Em uma instalação nova eles ficam vazios; depois que o usuário escolhe
+        // manualmente uma pasta, o Plutao lembra dela nas próximas aberturas.
+        var savedSettings = AppSettings.Load();
+        txtVideoOutput.PlaceholderText = "Escolha uma pasta para os vídeos...";
+        txtAudioOutput.PlaceholderText = "Escolha uma pasta para os áudios...";
+        txtVideoOutput.Text = savedSettings.VideoOutputDirectory;
+        txtAudioOutput.Text = savedSettings.AudioOutputDirectory;
         txtTemp.Text = _tools.TemporaryDirectory;
 
         foreach (var box in new[] { txtVideoOutput, txtAudioOutput, txtTemp })
@@ -508,11 +512,21 @@ public sealed class MainForm : Form
         profileSelection.SelectionChanged += (_, _) => ApplyProfileSelection();
         profileSelection.HideRequested += (_, _) => profileSelection.Visible = false;
 
-        btnBrowseVideo.Click += (_, _) => BrowseFolder(txtVideoOutput, "Escolha a pasta dos vídeos");
+        btnBrowseVideo.Click += (_, _) =>
+        {
+            BrowseFolder(txtVideoOutput, "Escolha a pasta dos vídeos");
+            SaveDestinationSettings();
+        };
         btnOpenVideo.Click += (_, _) => OpenFolder(txtVideoOutput.Text);
-        btnBrowseAudio.Click += (_, _) => BrowseFolder(txtAudioOutput, "Escolha a pasta dos áudios");
+        btnBrowseAudio.Click += (_, _) =>
+        {
+            BrowseFolder(txtAudioOutput, "Escolha a pasta dos áudios");
+            SaveDestinationSettings();
+        };
         btnOpenAudio.Click += (_, _) => OpenFolder(txtAudioOutput.Text);
         btnBrowseTemp.Click += (_, _) => BrowseFolder(txtTemp, "Escolha a pasta para arquivos temporários");
+        txtVideoOutput.Leave += (_, _) => SaveDestinationSettings();
+        txtAudioOutput.Leave += (_, _) => SaveDestinationSettings();
 
         btnDownload.Click += async (_, _) => await StartDownloadAsync();
         btnStop.Click += (_, _) => StopDownload();
@@ -526,7 +540,20 @@ public sealed class MainForm : Form
         ResizeEnd += (_, _) => ApplyResponsiveSpacing();
         btnOpenLastFile.Click += (_, _) => OpenLastFile();
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
-        FormClosing += (_, _) => StopDownload();
+        FormClosing += (_, _) =>
+        {
+            SaveDestinationSettings();
+            StopDownload();
+        };
+    }
+
+    private void SaveDestinationSettings()
+    {
+        AppSettings.Save(new AppSettings
+        {
+            VideoOutputDirectory = txtVideoOutput.Text.Trim(),
+            AudioOutputDirectory = txtAudioOutput.Text.Trim()
+        });
     }
 
     private void UpdateModeUi()

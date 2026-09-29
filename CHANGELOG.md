@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.3
+
+- Removidos os destinos fixos de Vídeos e Áudios. Em uma instalação nova, os campos começam vazios.
+- O Plutao agora salva as pastas escolhidas manualmente em `%LOCALAPPDATA%\Plutao\settings.json` e restaura essas escolhas nas próximas aberturas.
+- Alterar manualmente os destinos atualiza a preferência salva.
+- Adicionado GitHub Actions para gerar `Plutao.exe` e `Plutao-win-x64.zip` automaticamente a cada push relevante na branch `main`.
+- A compilação automática publica/atualiza a release `latest`, eliminando a necessidade de usar `build-release.bat` no fluxo normal.
+- Mantidos todos os recursos e arquivos da v0.4.2.
+
 ## 0.4.1
 
 - A análise de perfil não abre mais uma janela separada: perfil, estatísticas e seleção de vídeos aparecem dentro da janela principal.

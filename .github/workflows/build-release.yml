@@ -1,0 +1,73 @@
+name: Build Plutao Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - ".github/workflows/build-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Compilar Plutao
+        shell: pwsh
+        run: |
+          dotnet publish .\src\Plutao\Plutao.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            -o .\publish
+
+      - name: Criar ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path .\publish\Plutao.exe `
+            -DestinationPath .\Plutao-win-x64.zip `
+            -Force
+
+      - name: Guardar artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: Plutao-win-x64
+          path: |
+            publish/Plutao.exe
+            Plutao-win-x64.zip
+          if-no-files-found: error
+
+      - name: Publicar versao mais recente
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create latest `
+              --target main `
+              --title "Plutao - versão mais recente" `
+              --notes "Compilação automática da branch main."
+          }
+
+          gh release upload latest `
+            .\publish\Plutao.exe `
+            .\Plutao-win-x64.zip `
+            --clobber
