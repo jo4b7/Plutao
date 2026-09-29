@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+
+- Perfis do Instagram continuam sendo listados pelo `gallery-dl`, mas agora o Plutao completa os metadados de cada vídeo com o `yt-dlp` sem baixar a mídia.
+- A lista de vídeos do Instagram passa a mostrar **duração** e **visualizações** quando o Instagram/yt-dlp disponibiliza esses dados.
+- Quando a plataforma não entrega uma dessas informações, a interface mostra `—` em vez de simplesmente deixar o campo sumir.
+- A complementação de metadados é paralela com limite de processos para não deixar a análise excessivamente lenta nem disputar cookies do navegador.
+- Curtidas, resolução, data e miniatura obtidas na primeira etapa são preservadas quando a segunda fonte não fornece o mesmo campo.
+- O cache de análise de perfis foi renovado para evitar reutilizar listas antigas do Instagram sem duração/visualizações.
+- A coluna de informações passa a identificar explicitamente a duração (`Duração 0:18`, por exemplo).
+
 ## 0.5.3
 
 - Links base de canais do YouTube, como `youtube.com/@usuario`, passam a abrir automaticamente as categorias reais de **Vídeos**, **Shorts** e **Lives**.

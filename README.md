@@ -2,13 +2,15 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.3 — qualidades reais e canais organizados
+## v0.5.4 — metadados completos do Instagram
 
 A tela principal foi reorganizada para que o fluxo normal seja simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
 
-A v0.5.3 usa a análise do próprio yt-dlp para mostrar **somente as resoluções realmente disponíveis** em links individuais. Em canais do YouTube, basta colar o link base (`youtube.com/@usuario`): o Plutao consulta **Vídeos**, **Shorts** e **Lives**, organiza tudo por categoria e remove duplicados.
+A v0.5.4 mantém as qualidades reais e a organização de canais da v0.5.3 e melhora a análise de perfis do Instagram. O `gallery-dl` continua descobrindo rapidamente os posts/reels e o Plutao usa o `yt-dlp` apenas para completar os metadados dos vídeos, sem baixar a mídia durante a análise.
 
-Na lista de um perfil/canal, a linha inteira é clicável para selecionar ou desmarcar a mídia. Os filtros de categoria mostram contagens e os botões de seleção atuam sobre o que está visível.
+Na lista do Instagram, duração e visualizações aparecem quando a plataforma fornece esses dados. Quando um valor realmente não está disponível, o Plutao mostra `—` para deixar claro que o dado não foi informado. Curtidas, resolução, data e miniatura continuam sendo preservadas.
+
+Em canais do YouTube, basta colar o link base (`youtube.com/@usuario`): o Plutao consulta **Vídeos**, **Shorts** e **Lives**, organiza tudo por categoria e remove duplicados. A linha inteira continua clicável para selecionar ou desmarcar a mídia.
 
 A validação final da v0.5.2 continua ativa: o Plutao localiza o arquivo final e só conclui um MP4 depois de validar H.264/AAC ou HEVC/AAC conforme a resolução.
 

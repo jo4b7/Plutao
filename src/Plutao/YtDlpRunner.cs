@@ -761,14 +761,26 @@ public sealed class YtDlpRunner
             .Select((item, index) => item with { Index = index + 1 })
             .ToArray();
 
+        // O gallery-dl é excelente para descobrir os posts/reels do perfil,
+        // mas o extrator atual do Instagram não expõe duração nem contagem
+        // de visualizações no JSON de listagem. Para não deixar a grade
+        // incompleta, consultamos somente os metadados dos links encontrados
+        // com o yt-dlp (sem baixar mídia), em paralelo e com limite de carga.
+        var enriched = await EnrichInstagramMetadataAsync(
+            indexed,
+            browserCookies,
+            log,
+            progress,
+            ct);
+
         LastAnalyzedProfile = (LastAnalyzedProfile ?? BuildInstagramFallbackProfile(profileBase)) with
         {
-            FoundVideos = indexed.Length
+            FoundVideos = enriched.Length
         };
 
-        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{indexed.Length} vídeo(s) encontrado(s)"));
-        log.Report($"[Análise/Instagram] Encontrados {indexed.Length} vídeo(s) únicos.");
-        return indexed;
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{enriched.Length} vídeo(s) encontrado(s)"));
+        log.Report($"[Análise/Instagram] Encontrados {enriched.Length} vídeo(s) únicos.");
+        return enriched;
     }
 
     private async Task<string> RunGalleryDlAnalysisAsync(
@@ -896,12 +908,13 @@ public sealed class YtDlpRunner
 
                 var thumbnail = ReadString(metadata, "display_url") ?? string.Empty;
                 var date = ReadMediaDate(metadata);
+                var duration = ReadDouble(metadata, "video_duration") ?? ReadDouble(metadata, "duration");
                 var details = FormatInstagramMediaDetails(metadata);
                 items.Add(new CollectionMediaItem(
                     items.Count + 1,
                     shortcode,
                     title,
-                    "",
+                    FormatDuration(duration),
                     postUrl,
                     thumbnail,
                     date,
@@ -913,6 +926,266 @@ public sealed class YtDlpRunner
             // O stderr já é enviado ao log; um resultado inválido simplesmente
             // deixa este alvo sem itens e permite tentar o próximo (posts/reels).
         }
+    }
+
+    private async Task<CollectionMediaItem[]> EnrichInstagramMetadataAsync(
+        IReadOnlyList<CollectionMediaItem> items,
+        string browserCookies,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
+    {
+        if (items.Count == 0)
+            return Array.Empty<CollectionMediaItem>();
+
+        log.Report("[Análise/Instagram] Completando duração e visualizações dos vídeos...");
+        progress.Report(new DownloadProgressInfo(0, 0, 72, "", "", "", "Completando metadados do Instagram"));
+        await _tools.EnsureYtDlpAsync(log, progress, ct);
+
+        var results = new CollectionMediaItem[items.Count];
+        var completed = 0;
+        var successful = 0;
+        var unavailable = 0;
+
+        // Quando há cookies do navegador, menos processos simultâneos evitam
+        // disputar o banco de cookies. Sem cookies, podemos ser um pouco mais agressivos.
+        var maxParallel = string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase) ? 4 : 2;
+        using var gate = new SemaphoreSlim(maxParallel, maxParallel);
+
+        var tasks = items.Select(async (item, index) =>
+        {
+            await gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var (enriched, success) = await AnalyzeInstagramItemMetadataAsync(
+                    item,
+                    browserCookies,
+                    ct).ConfigureAwait(false);
+
+                results[index] = EnsureInstagramMetadataPlaceholders(enriched);
+                if (success)
+                    Interlocked.Increment(ref successful);
+                else
+                    Interlocked.Increment(ref unavailable);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                results[index] = EnsureInstagramMetadataPlaceholders(item);
+                Interlocked.Increment(ref unavailable);
+            }
+            finally
+            {
+                gate.Release();
+                var done = Interlocked.Increment(ref completed);
+                var percent = 72 + (int)Math.Round(24d * done / items.Count);
+                progress.Report(new DownloadProgressInfo(
+                    0,
+                    0,
+                    Math.Clamp(percent, 72, 96),
+                    "",
+                    "",
+                    item.Title,
+                    $"Metadados do Instagram: {done}/{items.Count}"));
+            }
+        }).ToArray();
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        log.Report($"[Análise/Instagram] Metadados: {successful}/{items.Count} vídeo(s) completados; {unavailable} com algum dado indisponível.");
+        return results;
+    }
+
+    private async Task<(CollectionMediaItem Item, bool Success)> AnalyzeInstagramItemMetadataAsync(
+        CollectionMediaItem item,
+        string browserCookies,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(item.Url))
+            return (item, false);
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.YtDlpPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        var args = new List<string>
+        {
+            "--dump-single-json",
+            "--skip-download",
+            "--no-playlist",
+            "--no-warnings",
+            "--cache-dir", _tools.CacheDirectory
+        };
+
+        if (!string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("--cookies-from-browser");
+            args.Add(browserCookies.ToLowerInvariant());
+        }
+
+        args.Add("--user-agent");
+        args.Add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36");
+        args.Add("--");
+        args.Add(item.Url);
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = new Process { StartInfo = psi };
+        process.Start();
+        using var reg = ct.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(true);
+            }
+            catch { }
+        });
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync(ct).ConfigureAwait(false);
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        _ = await stderrTask.ConfigureAwait(false);
+
+        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+            return (item, false);
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (item, false);
+
+            var metadata = root;
+            if (root.TryGetProperty("entries", out var entries) &&
+                entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.Object)
+                        continue;
+
+                    metadata = entry;
+                    if (ReadDouble(entry, "duration").HasValue ||
+                        ReadLong(entry, "view_count").HasValue ||
+                        ReadLong(entry, "like_count").HasValue)
+                        break;
+                }
+            }
+
+            var duration = FormatDuration(ReadDouble(metadata, "duration") ?? ReadDouble(root, "duration"));
+            if (string.IsNullOrWhiteSpace(duration))
+                duration = item.Duration;
+
+            var views = ReadLong(metadata, "view_count")
+                        ?? ReadLong(metadata, "video_view_count")
+                        ?? ReadLong(root, "view_count");
+            var likes = ReadLong(metadata, "like_count")
+                        ?? ReadLong(root, "like_count");
+            var width = ReadInt(metadata, "width") ?? ReadInt(root, "width");
+            var height = ReadInt(metadata, "height") ?? ReadInt(root, "height");
+
+            if ((!width.HasValue || !height.HasValue) && metadata.ValueKind == JsonValueKind.Object)
+            {
+                var max = ReadMaximumVideoResolution(metadata);
+                width ??= max.Width;
+                height ??= max.Height;
+            }
+
+            var thumbnail = ReadThumbnailUrl(metadata);
+            if (string.IsNullOrWhiteSpace(thumbnail))
+                thumbnail = ReadThumbnailUrl(root);
+            if (string.IsNullOrWhiteSpace(thumbnail))
+                thumbnail = item.ThumbnailUrl;
+
+            var date = ReadMediaDate(metadata);
+            if (string.IsNullOrWhiteSpace(date))
+                date = ReadMediaDate(root);
+            if (string.IsNullOrWhiteSpace(date))
+                date = item.Date;
+
+            var details = MergeInstagramMetadataDetails(item.Details, views, likes, width, height);
+
+            return (item with
+            {
+                Duration = duration,
+                ThumbnailUrl = thumbnail,
+                Date = date,
+                Details = details
+            }, true);
+        }
+        catch (JsonException)
+        {
+            return (item, false);
+        }
+    }
+
+    private static CollectionMediaItem EnsureInstagramMetadataPlaceholders(CollectionMediaItem item)
+    {
+        var duration = string.IsNullOrWhiteSpace(item.Duration) ? "—" : item.Duration;
+        var details = item.Details ?? string.Empty;
+        if (!details.Contains("visualiza", StringComparison.OrdinalIgnoreCase))
+            details = string.IsNullOrWhiteSpace(details)
+                ? "— visualizações"
+                : $"— visualizações • {details}";
+
+        return item with
+        {
+            Duration = duration,
+            Details = details
+        };
+    }
+
+    private static string MergeInstagramMetadataDetails(
+        string existing,
+        long? views,
+        long? likes,
+        int? width,
+        int? height)
+    {
+        var parts = (existing ?? string.Empty)
+            .Split('•', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var existingLikes = parts.FirstOrDefault(part =>
+            part.Contains("curtida", StringComparison.OrdinalIgnoreCase));
+        var existingSize = parts.FirstOrDefault(part =>
+            Regex.IsMatch(part, @"^\s*\d+\s*[×x]\s*\d+\s*$", RegexOptions.IgnoreCase));
+        var other = parts.Where(part =>
+                !part.Contains("visualiza", StringComparison.OrdinalIgnoreCase) &&
+                !part.Contains("curtida", StringComparison.OrdinalIgnoreCase) &&
+                !Regex.IsMatch(part, @"^\s*\d+\s*[×x]\s*\d+\s*$", RegexOptions.IgnoreCase))
+            .ToList();
+
+        var details = new List<string>
+        {
+            views.HasValue ? $"{views.Value:N0} visualizações" : "— visualizações"
+        };
+
+        if (likes.HasValue)
+            details.Add($"{likes.Value:N0} curtidas");
+        else if (!string.IsNullOrWhiteSpace(existingLikes))
+            details.Add(existingLikes);
+
+        if (width.HasValue && height.HasValue && width > 0 && height > 0)
+            details.Add($"{width}×{height}");
+        else if (!string.IsNullOrWhiteSpace(existingSize))
+            details.Add(existingSize);
+
+        details.AddRange(other);
+        return string.Join(" • ", details);
     }
 
     private static bool IsInstagramProfileUrl(string url)
@@ -1284,9 +1557,14 @@ public sealed class YtDlpRunner
     private static string FormatInstagramMediaDetails(JsonElement metadata)
     {
         var details = new List<string>();
+        var views = ReadLong(metadata, "view_count")
+                    ?? ReadLong(metadata, "video_view_count")
+                    ?? ReadLong(metadata, "play_count")
+                    ?? ReadLong(metadata, "views");
         var likes = ReadLong(metadata, "likes") ?? ReadLong(metadata, "like_count");
         var width = ReadInt(metadata, "width_original") ?? ReadInt(metadata, "width");
         var height = ReadInt(metadata, "height_original") ?? ReadInt(metadata, "height");
+        if (views.HasValue) details.Add($"{views.Value:N0} visualizações");
         if (likes.HasValue) details.Add($"{likes.Value:N0} curtidas");
         if (width.HasValue && height.HasValue && width > 0 && height > 0) details.Add($"{width}×{height}");
         return string.Join(" • ", details);

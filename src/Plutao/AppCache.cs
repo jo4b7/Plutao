@@ -236,7 +236,7 @@ internal static class AppCache
     }
 
     private static string BuildCollectionKey(string url, string browserCookies, int limit)
-        => $"collection-v053-youtube-tabs1|{NormalizeUrl(url)}|{browserCookies.Trim().ToLowerInvariant()}|{limit}";
+        => $"collection-v054-instagram-meta1-youtube-tabs1|{NormalizeUrl(url)}|{browserCookies.Trim().ToLowerInvariant()}|{limit}";
 
     public static string BuildDownloadKey(string url, DownloadOptions options)
     {

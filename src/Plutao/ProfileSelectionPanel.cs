@@ -940,7 +940,7 @@ public sealed class ProfileSelectionPanel : UserControl
         var details = new List<string>();
         if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
         if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
-        if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add(item.Duration);
+        if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add($"Duração {item.Duration}");
         if (!string.IsNullOrWhiteSpace(item.Details)) details.Add(CompactText(item.Details, 120));
         return string.Join("  •  ", details);
     }
@@ -950,7 +950,7 @@ public sealed class ProfileSelectionPanel : UserControl
         var details = new List<string>();
         if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
         if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
-        if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add(item.Duration);
+        if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add($"Duração {item.Duration}");
         if (!string.IsNullOrWhiteSpace(item.Details)) details.Add(item.Details);
         return string.Join(Environment.NewLine, details);
     }
