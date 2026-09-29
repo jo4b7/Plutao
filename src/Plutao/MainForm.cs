@@ -22,7 +22,7 @@ public sealed class MainForm : Form
     private readonly TextBox txtAudioOutput = new();
     private readonly TextBox txtTemp = new();
 
-    private readonly CheckBox chkPlaylist = new() { Text = "Baixar página/conta/canal/perfil completo", Checked = true, AutoSize = true };
+    private readonly CheckBox chkPlaylist = new() { Text = "Permitir página/conta/canal/perfil completo", Checked = true, AutoSize = true };
     private readonly CheckBox chkOrganize = new() { Text = "Organizar por canal/criador", AutoSize = true };
     private readonly CheckBox chkMetadata = new() { Text = "Incorporar metadados", Checked = true, AutoSize = true };
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
@@ -773,6 +773,8 @@ public sealed class MainForm : Form
         SetBusy(true);
         SetProgressUi(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando"));
         AppendLog($"Iniciando {downloadUrls.Count} link(s)...");
+        if (downloadUrls.Count == 1 && YtDlpRunner.IsLikelySingleMediaUrl(downloadUrls[0]))
+            AppendLog("Detecção automática: mídia individual; o modo de página/playlist será ignorado para acelerar o início.");
         if (usingSelectedUrls)
             AppendLog($"Seleção individual: {downloadUrls.Count} mídia(s) da conta serão baixadas por URL individual.");
         AppendLog($"Destino: {options.OutputDirectory}");

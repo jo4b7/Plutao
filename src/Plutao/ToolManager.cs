@@ -9,6 +9,7 @@ public sealed class ToolManager
     private readonly HttpClient _http = new();
 
     public string ToolsDirectory { get; }
+    public string CacheDirectory { get; }
     public string TemporaryDirectory { get; set; }
     public string YtDlpPath => Path.Combine(ToolsDirectory, "yt-dlp.exe");
     public string FfmpegPath => Path.Combine(ToolsDirectory, "ffmpeg.exe");
@@ -18,11 +19,20 @@ public sealed class ToolManager
 
     public ToolManager()
     {
-        ToolsDirectory = Path.Combine(AppContext.BaseDirectory, "tools");
+        var appDataRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Plutao");
+
+        ToolsDirectory = Path.Combine(appDataRoot, "tools");
+        CacheDirectory = Path.Combine(appDataRoot, "cache");
         TemporaryDirectory = ResolveDefaultTempDirectory();
+
         Directory.CreateDirectory(ToolsDirectory);
+        Directory.CreateDirectory(CacheDirectory);
         Directory.CreateDirectory(TemporaryDirectory);
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.4.2"));
+        MigrateLegacyTools();
+
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.4.4"));
 
         // O HttpClient usa 100 s por padrão. O pacote do FFmpeg pode levar mais
         // que isso em conexões lentas e acabava sendo mostrado como "cancelado".
@@ -40,6 +50,23 @@ public sealed class ToolManager
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Plutao",
             "Temporarios");
+    }
+
+
+    public async Task EnsureDownloadDependenciesAsync(
+        IReadOnlyList<string> urls,
+        IProgress<string>? log = null,
+        IProgress<DownloadProgressInfo>? progress = null,
+        CancellationToken ct = default)
+    {
+        Directory.CreateDirectory(TemporaryDirectory);
+        await EnsureYtDlpAsync(log, progress, ct);
+        await EnsureFfmpegAsync(log, progress, ct);
+
+        // Deno é necessário principalmente para o extrator moderno do YouTube.
+        // Outras plataformas não precisam esperar por ele antes de iniciar.
+        if (urls.Any(IsYouTubeUrl))
+            await EnsureDenoAsync(log, progress, ct);
     }
 
     public async Task EnsureAllAsync(
@@ -202,6 +229,36 @@ public sealed class ToolManager
             TryDeleteDirectory(extractDir);
         }
     }
+
+
+    private void MigrateLegacyTools()
+    {
+        // Versões anteriores guardavam os componentes ao lado do Plutao.exe.
+        // Copiamos os que já existem para o cache permanente para evitar novo download.
+        try
+        {
+            var legacyDirectory = Path.Combine(AppContext.BaseDirectory, "tools");
+            if (!Directory.Exists(legacyDirectory) ||
+                Path.GetFullPath(legacyDirectory).Equals(Path.GetFullPath(ToolsDirectory), StringComparison.OrdinalIgnoreCase))
+                return;
+
+            foreach (var fileName in new[] { "yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe", "deno.exe", "gallery-dl.exe" })
+            {
+                var source = Path.Combine(legacyDirectory, fileName);
+                var destination = Path.Combine(ToolsDirectory, fileName);
+                if (File.Exists(source) && !File.Exists(destination))
+                    File.Copy(source, destination, false);
+            }
+        }
+        catch
+        {
+            // Migração é apenas uma otimização; falhas não impedem o aplicativo de abrir.
+        }
+    }
+
+    private static bool IsYouTubeUrl(string url)
+        => url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+           url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
 
     private async Task DownloadFileAsync(
         string url,

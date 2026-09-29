@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.4
+
+- Componentes (`yt-dlp`, `FFmpeg`, `ffprobe`, `Deno` e `gallery-dl`) passam a usar cache permanente em `%LOCALAPPDATA%\Plutao\tools`, sobrevivendo à troca do `Plutao.exe`.
+- Migração automática dos componentes encontrados na antiga pasta `tools` ao lado do executável, evitando novo download depois da atualização.
+- Cache permanente do yt-dlp em `%LOCALAPPDATA%\Plutao\cache`.
+- Detecção automática de links individuais de YouTube/Shorts, Instagram/Reels, TikTok, X/Twitter e Facebook; links individuais usam `--no-playlist` mesmo quando o modo de conta/página está permitido.
+- Deno só é preparado quando o link realmente usa YouTube; outras plataformas deixam de esperar por um componente desnecessário.
+- Status da análise ficou mais informativo: conexão, obtenção de informações, leitura de formatos, seleção de formato e início do download.
+- Log ganhou tempos de preparação dos componentes, análise do link, download/processamento e tempo total do item.
+
 ## 0.4.3
 
 - Removidos os destinos fixos de Vídeos e Áudios. Em uma instalação nova, os campos começam vazios.

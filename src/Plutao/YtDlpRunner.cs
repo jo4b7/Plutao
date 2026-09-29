@@ -24,6 +24,14 @@ public sealed class YtDlpRunner
     public string? LastCompletedFilePath { get; private set; }
     public ProfileInfo? LastAnalyzedProfile { get; private set; }
 
+    private sealed class RunTiming
+    {
+        public Stopwatch Total { get; } = Stopwatch.StartNew();
+        public object SyncRoot { get; } = new();
+        public bool DownloadStarted { get; set; }
+        public TimeSpan AnalysisDuration { get; set; }
+    }
+
     public YtDlpRunner(ToolManager tools) => _tools = tools;
 
     public void Stop()
@@ -50,7 +58,10 @@ public sealed class YtDlpRunner
 
         progress.Report(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando componentes"));
         log.Report("Preparando componentes...");
-        await _tools.EnsureAllAsync(log, progress, ct);
+        var componentsTimer = Stopwatch.StartNew();
+        await _tools.EnsureDownloadDependenciesAsync(urls, log, progress, ct);
+        componentsTimer.Stop();
+        log.Report($"[Tempo] Componentes: {FormatElapsed(componentsTimer.Elapsed)}");
 
         var hadErrors = false;
         for (var i = 0; i < urls.Count; i++)
@@ -92,9 +103,10 @@ public sealed class YtDlpRunner
             return await AnalyzeInstagramProfileAsync(url, browserCookies, limit, log, progress, ct);
 
         progress.Report(new DownloadProgressInfo(0, 0, 0, "", "", "", "Preparando análise"));
-        log.Report("[Análise] Preparando yt-dlp e Deno...");
+        log.Report("[Análise] Preparando componentes do analisador...");
         await _tools.EnsureYtDlpAsync(log, progress, ct);
-        await _tools.EnsureDenoAsync(log, progress, ct);
+        if (IsYouTubeUrl(url))
+            await _tools.EnsureDenoAsync(log, progress, ct);
 
         var psi = new ProcessStartInfo
         {
@@ -114,8 +126,14 @@ public sealed class YtDlpRunner
             "--skip-download",
             "--ignore-errors",
             "--yes-playlist",
-            "--js-runtimes", $"deno:{_tools.DenoPath}"
+            "--cache-dir", _tools.CacheDirectory
         };
+
+        if (IsYouTubeUrl(url))
+        {
+            args.Add("--js-runtimes");
+            args.Add($"deno:{_tools.DenoPath}");
+        }
 
         if (limit > 0)
         {
@@ -809,6 +827,11 @@ public sealed class YtDlpRunner
             : string.Empty;
 
         _currentCompletedFilePath = null;
+        var timing = new RunTiming();
+        var singleMedia = IsLikelySingleMediaUrl(url);
+        if (singleMedia && options.AllowPlaylists)
+            log.Report("[Detecção] Link de mídia individual: modo de página/playlist ignorado automaticamente.");
+
         var args = BuildArguments(url, options, uniqueSuffix);
         var psi = new ProcessStartInfo
         {
@@ -826,10 +849,11 @@ public sealed class YtDlpRunner
             psi.ArgumentList.Add(arg);
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress);
-        _process.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress);
+        _process.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        _process.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
 
         log.Report($"URL: {url}");
+        progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Conectando à plataforma"));
         _process.Start();
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
@@ -864,6 +888,18 @@ public sealed class YtDlpRunner
             }
         }
 
+        timing.Total.Stop();
+        if (timing.DownloadStarted)
+        {
+            var afterAnalysis = timing.Total.Elapsed - timing.AnalysisDuration;
+            if (afterAnalysis < TimeSpan.Zero) afterAnalysis = TimeSpan.Zero;
+            log.Report($"[Tempo] Download/processamento: {FormatElapsed(afterAnalysis)} • Total: {FormatElapsed(timing.Total.Elapsed)}");
+        }
+        else
+        {
+            log.Report($"[Tempo] Total do item: {FormatElapsed(timing.Total.Elapsed)}");
+        }
+
         if (exitCode == 0)
             progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Concluído"));
 
@@ -875,7 +911,8 @@ public sealed class YtDlpRunner
         int itemIndex,
         int itemCount,
         IProgress<string> log,
-        IProgress<DownloadProgressInfo> progress)
+        IProgress<DownloadProgressInfo> progress,
+        RunTiming timing)
     {
         if (string.IsNullOrWhiteSpace(rawLine)) return;
         var line = AnsiRegex.Replace(rawLine, string.Empty).TrimEnd();
@@ -894,6 +931,7 @@ public sealed class YtDlpRunner
 
         if (line.StartsWith(ProgressPrefix, StringComparison.Ordinal))
         {
+            MarkDownloadStarted(timing, log);
             var payload = line[ProgressPrefix.Length..];
             var parts = payload.Split('|', 6);
             var percent = ParsePercent(parts.ElementAtOrDefault(0));
@@ -906,6 +944,36 @@ public sealed class YtDlpRunner
             progress.Report(new DownloadProgressInfo(
                 itemIndex, itemCount, percent, speed, eta, title, "Baixando", collectionIndex, collectionCount));
             return;
+        }
+
+        if (line.StartsWith("[download] Destination:", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkDownloadStarted(timing, log);
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Iniciando download"));
+        }
+        else if (line.Contains(" has already been downloaded", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkDownloadStarted(timing, log);
+        }
+        else if (line.StartsWith("[info]", StringComparison.OrdinalIgnoreCase) &&
+                 line.Contains("Downloading", StringComparison.OrdinalIgnoreCase) &&
+                 line.Contains("format", StringComparison.OrdinalIgnoreCase))
+        {
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Selecionando formato"));
+        }
+        else if (line.Contains("Downloading webpage", StringComparison.OrdinalIgnoreCase))
+        {
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Obtendo informações"));
+        }
+        else if (line.Contains("player API JSON", StringComparison.OrdinalIgnoreCase) ||
+                 line.Contains("m3u8 information", StringComparison.OrdinalIgnoreCase) ||
+                 line.Contains("Downloading API JSON", StringComparison.OrdinalIgnoreCase))
+        {
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Lendo formatos disponíveis"));
+        }
+        else if (line.Contains("Extracting URL", StringComparison.OrdinalIgnoreCase))
+        {
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Conectando à plataforma"));
         }
 
         TryCaptureCompletedFile(line);
@@ -983,7 +1051,7 @@ public sealed class YtDlpRunner
             "--retries", "5",
             "--fragment-retries", "5",
             "--ffmpeg-location", _tools.ToolsDirectory,
-            "--js-runtimes", $"deno:{_tools.DenoPath}",
+            "--cache-dir", _tools.CacheDirectory,
             "--progress-template", "download:PLUTAO_PROGRESS|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.playlist_index)s|%(info.playlist_count)s|%(info.title)s",
             "--print", "after_move:PLUTAO_FILE|%(filepath)s",
             "-P", o.OutputDirectory,
@@ -991,7 +1059,14 @@ public sealed class YtDlpRunner
             "-o", OutputTemplate(o, uniqueSuffix)
         };
 
-        if (!o.AllowPlaylists)
+        if (IsYouTubeUrl(url))
+        {
+            args.Add("--js-runtimes");
+            args.Add($"deno:{_tools.DenoPath}");
+        }
+
+        var singleMedia = IsLikelySingleMediaUrl(url);
+        if (singleMedia || !o.AllowPlaylists)
         {
             args.Add("--no-playlist");
         }
@@ -1074,6 +1149,59 @@ public sealed class YtDlpRunner
         args.Add("--");
         args.Add(url.Trim());
         return args;
+    }
+
+    public static bool IsLikelySingleMediaUrl(string url)
+    {
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            return false;
+
+        var host = uri.Host.ToLowerInvariant();
+        var path = uri.AbsolutePath.ToLowerInvariant();
+
+        if (host.Contains("youtu.be")) return true;
+        if (host.Contains("youtube.com") &&
+            (path.StartsWith("/watch") || path.StartsWith("/shorts/") || path.StartsWith("/live/")))
+            return true;
+
+        if (host.Contains("instagram.com") &&
+            (path.StartsWith("/p/") || path.StartsWith("/reel/") || path.StartsWith("/tv/")))
+            return true;
+
+        if ((host.Contains("tiktok.com") && path.Contains("/video/")) ||
+            host.Equals("vm.tiktok.com", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("vt.tiktok.com", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if ((host.Contains("twitter.com") || host.Contains("x.com")) && path.Contains("/status/"))
+            return true;
+
+        if (host.Contains("facebook.com") && (path.Contains("/reel/") || path.Contains("/watch")))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsYouTubeUrl(string url)
+        => url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+           url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+
+    private static void MarkDownloadStarted(RunTiming timing, IProgress<string> log)
+    {
+        lock (timing.SyncRoot)
+        {
+            if (timing.DownloadStarted) return;
+            timing.DownloadStarted = true;
+            timing.AnalysisDuration = timing.Total.Elapsed;
+            log.Report($"[Tempo] Preparação/análise do link: {FormatElapsed(timing.AnalysisDuration)}");
+        }
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalMinutes >= 1)
+            return $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+        return $"{elapsed.TotalSeconds:0.0}s";
     }
 
     private static string OutputTemplate(DownloadOptions o, string uniqueSuffix)

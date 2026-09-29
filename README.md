@@ -17,9 +17,12 @@ Isso evita depender de extensões AV1/VP9 do Windows para reproduzir MP4s baixad
 
 Perfis do Instagram são analisados com gallery-dl como fallback e os vídeos selecionados são baixados individualmente pelo yt-dlp. YouTube, TikTok e outras coleções usam os extratores disponíveis conforme a plataforma.
 
-## Compilar
+## Compilação e execução
 
-Execute `build-release.bat`. O executável final será criado em `release/Plutao.exe`.
+O fluxo normal usa GitHub Actions: faça **Commit + Push** e aguarde `Build Plutao Release` ficar verde.
+Depois baixe `Plutao.exe` em **Releases → Plutao - versão mais recente**.
+
+`build-release.bat` permanece apenas como alternativa local de emergência.
 
 ## Interface compacta
 
@@ -31,9 +34,9 @@ A interface usa DPI Per-Monitor V2, layout responsivo e rolagem de segurança pa
 
 Na v0.3.5 o espaçamento vertical também se adapta ao monitor: em QHD/2K a interface fica mais confortável e, em HD, volta automaticamente para medidas compactas.
 
-Pastas padrão desta instalação:
-- Vídeos: `E:\[VIDEOS]`
-- Áudios: `E:\[MUSICAS]`
+## Destinos
+
+Vídeos e Áudios não têm mais um disco fixo. Na primeira execução, escolha as pastas manualmente; o Plutao salva as escolhas em `%LOCALAPPDATA%\Plutao\settings.json`.
 ## Visualização de perfil
 
 Ao usar **VER / ANALISAR PERFIL**, o Plutao mostra as informações e a seleção de vídeos **dentro da própria janela principal**, sem abrir outra janela:
@@ -53,3 +56,9 @@ As miniaturas são opcionais: se a CDN da plataforma bloquear uma imagem, a sele
 ### Desempenho das miniaturas
 
 Na v0.4.1, as primeiras miniaturas da lista são priorizadas e o restante é carregado em paralelo em segundo plano. As imagens ficam em cache por até 7 dias em `%LOCALAPPDATA%\Plutao\thumb-cache`, então reabrir um perfil já analisado tende a ser quase instantâneo. As imagens também são redimensionadas antes de permanecerem na memória para reduzir consumo de RAM em perfis com centenas de vídeos.
+
+## Componentes permanentes e início mais rápido
+
+Na v0.4.4, `yt-dlp`, FFmpeg/ffprobe, Deno e gallery-dl ficam em `%LOCALAPPDATA%\Plutao\tools`. Trocar o `Plutao.exe` não obriga mais a baixar esses componentes novamente. Se houver uma pasta `tools` antiga ao lado do executável, os componentes existentes são copiados automaticamente para o novo local.
+
+Links de mídia individual são detectados automaticamente e usam modo sem playlist, mesmo que a opção de páginas/contas esteja habilitada. O log também mede o tempo gasto em análise, download/processamento e total, facilitando identificar gargalos por plataforma.
