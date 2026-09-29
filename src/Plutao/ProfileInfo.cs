@@ -11,7 +11,8 @@ public sealed record ProfileInfo(
     long? Posts = null,
     bool? IsVerified = null,
     bool? IsPrivate = null,
-    string ExternalUrl = "")
+    string ExternalUrl = "",
+    string CreatedDate = "")
 {
     public int FoundVideos { get; init; }
 }

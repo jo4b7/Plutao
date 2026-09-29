@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0
+
+- Interface principal redesenhada com fluxo de aplicativo: colar link, visualizar prévia, escolher modo/qualidade/formato e baixar.
+- Configurações técnicas e diagnóstico saíram do caminho principal e ficam recolhidos por padrão.
+- Prévia automática para links individuais com título, criador, duração, data de publicação, visualizações, curtidas e resolução quando disponíveis.
+- Ao clicar em BAIXAR sem destino configurado, o Plutao pede a pasta naquele momento e salva a escolha.
+- Perfis continuam na mesma janela e agora podem mostrar a data de criação da conta quando a plataforma fornece um campo explícito confiável.
+- Vídeos de perfil continuam mostrando data de publicação e demais metadados disponíveis.
+- Compatibilidade MP4 automática: H.264/AAC até 1080p e HEVC/H.265 + AAC acima de 1080p.
+- A resolução escolhida agora tem prioridade sobre o codec; 1440p/2160p pode ser baixado em VP9/AV1 e convertido depois, sem cair silenciosamente para 1080p.
+- `ffprobe` mede a altura real antes de decidir entre H.264 e HEVC; a opção “Melhor” também segue a regra automaticamente.
+- Cache de prévia persistente para evitar repetir consultas recentes do mesmo link.
+- Reutilização de download concluído para o mesmo link + mesmas opções; em “Manter os dois”, uma nova cópia local é criada sem nova análise/download/conversão.
+- Miniaturas passam a usar `%LOCALAPPDATA%\Plutao\cache\thumbs` com limpeza LRU automática e limite aproximado de 400 MB.
+- Cache antigo de miniaturas é migrado automaticamente quando encontrado.
+- Diagnóstico de tempo separa conexão/extração, seleção de formato, download/merge, compatibilidade/codec e total quando as etapas são detectáveis.
+
 ## 0.4.4
 
 - Componentes (`yt-dlp`, `FFmpeg`, `ffprobe`, `Deno` e `gallery-dl`) passam a usar cache permanente em `%LOCALAPPDATA%\Plutao\tools`, sobrevivendo à troca do `Plutao.exe`.

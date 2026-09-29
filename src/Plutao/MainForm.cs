@@ -28,7 +28,7 @@ public sealed class MainForm : Form
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
     private readonly CheckBox chkJson = new() { Text = "Salvar info JSON", AutoSize = true };
     private readonly CheckBox chkArchive = new() { Text = "Evitar repetir o mesmo link (histórico)", Checked = false, AutoSize = true };
-    private readonly CheckBox chkCompatibleMp4 = new() { Text = "MP4 compatível (garantir H.264/AAC)", Checked = true, AutoSize = true };
+    private readonly CheckBox chkCompatibleMp4 = new() { Text = "Compatibilidade automática (H.264 até 1080p • HEVC acima)", Checked = true, AutoSize = true };
 
     private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 44 };
     private readonly Button btnStop = new() { Text = "PARAR", Height = 44, Enabled = false };
@@ -40,12 +40,12 @@ public sealed class MainForm : Form
     private readonly Button btnBrowseTemp = new() { Text = "Procurar" };
     private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
     private readonly Button btnClearLog = new() { Text = "Limpar log" };
-    private readonly Button btnAdvanced = new() { Text = "OPÇÕES AVANÇADAS", AutoSize = true };
-    private readonly Button btnToggleLog = new() { Text = "MOSTRAR LOG", AutoSize = true };
+    private readonly Button btnAdvanced = new() { Text = "Configurações", AutoSize = true };
+    private readonly Button btnToggleLog = new() { Text = "Ver diagnóstico", AutoSize = true };
     private readonly GroupBox grpAdvanced = new();
     private readonly GroupBox grpLog = new();
     private readonly ProfileSelectionPanel profileSelection = new();
-    private readonly Button btnAnalyzeCollection = new() { Text = "VER / ANALISAR PERFIL", AutoSize = true };
+    private readonly Button btnAnalyzeCollection = new() { Text = "ANALISAR PERFIL / CANAL", AutoSize = true };
     private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
     private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
     private readonly Button btnOpenLastFolder = new() { Text = "ABRIR PASTA", Height = 44, Enabled = false };
@@ -54,6 +54,28 @@ public sealed class MainForm : Form
     private readonly TextBox txtLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false };
     private readonly Label lblStatus = new() { Text = "Pronto", AutoSize = true };
     private readonly Label lblCurrent = new() { Text = "Aguardando download", AutoEllipsis = true, Dock = DockStyle.Fill };
+
+    private readonly Label lblLinkHint = new() { Text = "Cole um link para começar", AutoSize = true };
+    private readonly PictureBox picPreview = new()
+    {
+        Width = 150,
+        Height = 86,
+        SizeMode = PictureBoxSizeMode.Zoom,
+        BackColor = Color.FromArgb(26, 26, 26),
+        Visible = false
+    };
+    private readonly Label lblPreviewTitle = new() { Text = "Cole um link para começar", AutoSize = true, AutoEllipsis = true };
+    private readonly Label lblPreviewMeta = new() { Text = "Vídeo, áudio, perfil, canal ou playlist", AutoSize = true };
+    private readonly Label lblPreviewDetails = new() { Text = "", AutoSize = true };
+    private readonly Label lblDestination = new() { Text = "Destino não definido", AutoSize = true, AutoEllipsis = true };
+    private readonly Button btnChangeDestination = new() { Text = "Alterar", AutoSize = true };
+    private readonly Button btnOpenDownloads = new() { Text = "Abrir downloads", AutoSize = true };
+    private readonly Label lblQualityCaption = new() { Text = "Qualidade", AutoSize = true };
+    private readonly Label lblVideoFormatCaption = new() { Text = "Formato", AutoSize = true };
+    private readonly Label lblAudioFormatCaption = new() { Text = "Formato", AutoSize = true };
+    private readonly System.Windows.Forms.Timer _previewTimer = new() { Interval = 700 };
+    private CancellationTokenSource? _previewCts;
+    private Task? _previewTask;
 
     private string? _analyzedCollectionUrl;
     private string _selectedPlaylistItems = string.Empty;
@@ -73,10 +95,10 @@ public sealed class MainForm : Form
     {
         _runner = new YtDlpRunner(_tools);
 
-        Text = "Plutao - Downloader Universal";
-        Width = 1180;
-        Height = 780;
-        MinimumSize = new Size(860, 620);
+        Text = "Plutao";
+        Width = 1120;
+        Height = 820;
+        MinimumSize = new Size(820, 620);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -91,8 +113,6 @@ public sealed class MainForm : Form
 
     private void BuildUi()
     {
-        // O painel externo permite que a interface continue utilizável em telas
-        // menores sem esmagar controles. Em telas grandes ele não mostra rolagem.
         var scrollHost = new Panel
         {
             Dock = DockStyle.Fill,
@@ -107,9 +127,9 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12),
+            Padding = new Padding(24, 18, 24, 24),
             ColumnCount = 1,
-            RowCount = 9,
+            RowCount = 10,
             BackColor = Bg
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -117,156 +137,364 @@ public sealed class MainForm : Form
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         scrollHost.Controls.Add(root);
 
-        // Links: mantém a área grande, mas um pouco mais compacta.
-        var urlBox = CreateGroup("Links (um por linha)");
-        urlBox.Name = "grpLinks";
-        urlBox.AutoSize = false;
-        urlBox.Height = 155;
-        var urlLayout = new TableLayoutPanel
+        // Cabeçalho simples, com cara de aplicativo pronto.
+        var header = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            AutoSize = true,
             ColumnCount = 2,
-            RowCount = 1,
-            Padding = new Padding(8)
+            Margin = new Padding(0, 0, 0, 14),
+            BackColor = Bg
         };
-        urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        urlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
-        txtUrls.Dock = DockStyle.Fill;
-        btnPaste.Dock = DockStyle.Top;
-        btnPaste.Height = 32;
-        urlLayout.Controls.Add(txtUrls, 0, 0);
-        urlLayout.Controls.Add(btnPaste, 1, 0);
-        urlBox.Controls.Add(urlLayout);
-        root.Controls.Add(urlBox);
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        // Formato usa FlowLayout: quando a largura/DPI muda, os controles quebram
-        // de linha em vez de ficarem espremidos ou cortados.
-        var formatBox = CreateGroup("Formato");
-        formatBox.Name = "grpFormat";
-        var format = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            WrapContents = true,
-            FlowDirection = FlowDirection.LeftToRight,
-            Padding = new Padding(8, 7, 8, 7)
-        };
-        rbVideo.Margin = new Padding(4, 6, 8, 4);
-        rbAudio.Margin = new Padding(4, 6, 18, 4);
-        cmbQuality.Width = 145;
-        cmbVideoFormat.Width = 135;
-        cmbAudioFormat.Width = 165;
-        format.Controls.Add(rbVideo);
-        format.Controls.Add(rbAudio);
-        format.Controls.Add(LabelFor("Qualidade:"));
-        format.Controls.Add(cmbQuality);
-        format.Controls.Add(LabelFor("Contêiner:"));
-        format.Controls.Add(cmbVideoFormat);
-        format.Controls.Add(LabelFor("Áudio:"));
-        format.Controls.Add(cmbAudioFormat);
-        formatBox.Controls.Add(format);
-        root.Controls.Add(formatBox);
-
-        // Na tela principal ficam apenas as escolhas usadas o tempo todo.
-        var mainOptions = CreateGroup("Destino e conta/página");
-        mainOptions.Name = "grpMainOptions";
-        var opts = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 4,
-            RowCount = 4,
-            Padding = new Padding(8)
-        };
-        opts.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
-        opts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
-
-        AddFolderRow(opts, 0, "Vídeos:", txtVideoOutput, btnBrowseVideo, btnOpenVideo);
-        AddFolderRow(opts, 1, "Áudios:", txtAudioOutput, btnBrowseAudio, btnOpenAudio);
-
-        opts.Controls.Add(LabelFor("Conta/página:"), 0, 2);
-        opts.Controls.Add(chkPlaylist, 1, 2);
-        var collectionLimitPanel = new FlowLayoutPanel
+        var brand = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = Bg,
+            Margin = new Padding(0)
+        };
+        var brandTitle = new Label
+        {
+            Text = "PLUTAO",
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 22F, FontStyle.Bold),
+            ForeColor = TextMain,
+            Margin = new Padding(0)
+        };
+        var brandSub = new Label
+        {
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.0",
+            AutoSize = true,
+            ForeColor = TextMuted,
+            Margin = new Padding(2, 0, 0, 0)
+        };
+        brand.Controls.Add(brandTitle);
+        brand.Controls.Add(brandSub);
+        header.Controls.Add(brand, 0, 0);
+
+        var headerActions = new FlowLayoutPanel
+        {
             AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
+            BackColor = Bg,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        headerActions.Controls.Add(btnOpenDownloads);
+        headerActions.Controls.Add(btnAdvanced);
+        header.Controls.Add(headerActions, 1, 0);
+        root.Controls.Add(header);
+
+        // Entrada principal: é a primeira coisa que o usuário vê e entende.
+        var linkCard = CreateCardPanel("linkCard");
+        linkCard.Height = 142;
+        var linkLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(18, 14, 18, 12),
+            BackColor = Panel
+        };
+        linkLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        linkLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        linkLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        linkLayout.Controls.Add(new Label
+        {
+            Text = "O que você quer baixar?",
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 12F),
+            ForeColor = TextMain,
+            Margin = new Padding(0, 0, 0, 8)
+        }, 0, 0);
+
+        var linkRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            BackColor = Panel,
             Margin = new Padding(0)
         };
-        collectionLimitPanel.Controls.Add(LabelFor("Limite:"));
-        cmbCollectionLimit.Width = 90;
-        collectionLimitPanel.Controls.Add(cmbCollectionLimit);
-        opts.Controls.Add(collectionLimitPanel, 2, 2);
-        opts.SetColumnSpan(collectionLimitPanel, 2);
+        linkRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        linkRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+        txtUrls.Dock = DockStyle.Fill;
+        txtUrls.BorderStyle = BorderStyle.FixedSingle;
+        txtUrls.Font = new Font("Segoe UI", 11F);
+        txtUrls.PlaceholderText = "Cole um link do YouTube, Instagram, TikTok...";
+        btnPaste.Dock = DockStyle.Fill;
+        btnPaste.Text = "COLAR";
+        linkRow.Controls.Add(txtUrls, 0, 0);
+        linkRow.Controls.Add(btnPaste, 1, 0);
+        linkLayout.Controls.Add(linkRow, 0, 1);
+        lblLinkHint.ForeColor = TextMuted;
+        lblLinkHint.Margin = new Padding(0, 7, 0, 0);
+        linkLayout.Controls.Add(lblLinkHint, 0, 2);
+        linkCard.Controls.Add(linkLayout);
+        root.Controls.Add(linkCard);
 
-        opts.Controls.Add(LabelFor("Seleção:"), 0, 3);
-        var collectionSelectPanel = new FlowLayoutPanel
+        // Cartão de prévia: aparece imediatamente após colar um link individual.
+        var previewCard = CreateCardPanel("previewCard");
+        previewCard.Height = 120;
+        var previewLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            Padding = new Padding(14),
+            BackColor = Panel
+        };
+        previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 166));
+        previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        picPreview.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+        previewLayout.Controls.Add(picPreview, 0, 0);
+
+        var previewText = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = Panel,
+            Margin = new Padding(0, 4, 0, 0)
+        };
+        lblPreviewTitle.Font = new Font("Segoe UI Semibold", 12F);
+        lblPreviewTitle.ForeColor = TextMain;
+        lblPreviewTitle.MaximumSize = new Size(760, 44);
+        lblPreviewMeta.ForeColor = TextMuted;
+        lblPreviewDetails.ForeColor = Color.FromArgb(205, 205, 205);
+        previewText.Controls.Add(lblPreviewTitle);
+        previewText.Controls.Add(lblPreviewMeta);
+        previewText.Controls.Add(lblPreviewDetails);
+        previewLayout.Controls.Add(previewText, 1, 0);
+        previewCard.Controls.Add(previewLayout);
+        root.Controls.Add(previewCard);
+
+        // Ações essenciais: modo, qualidade, destino e baixar.
+        var actionCard = CreateCardPanel("actionCard");
+        actionCard.AutoSize = true;
+        actionCard.MinimumSize = new Size(0, 188);
+        var actionLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(18, 14, 18, 14),
+            BackColor = Panel
+        };
+
+        var modeRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = true,
+            BackColor = Panel,
             Margin = new Padding(0)
         };
-        collectionSelectPanel.Controls.Add(btnAnalyzeCollection);
-        collectionSelectPanel.Controls.Add(lblCollectionInfo);
-        opts.Controls.Add(collectionSelectPanel, 1, 3);
-        opts.SetColumnSpan(collectionSelectPanel, 3);
+        rbVideo.Font = new Font("Segoe UI Semibold", 10F);
+        rbAudio.Font = new Font("Segoe UI Semibold", 10F);
+        rbVideo.Margin = new Padding(0, 6, 18, 6);
+        rbAudio.Margin = new Padding(0, 6, 26, 6);
+        modeRow.Controls.Add(rbVideo);
+        modeRow.Controls.Add(rbAudio);
 
-        mainOptions.Controls.Add(opts);
-        root.Controls.Add(mainOptions);
+        lblQualityCaption.Margin = new Padding(0, 9, 7, 0);
+        cmbQuality.Width = 120;
+        cmbQuality.Margin = new Padding(0, 4, 18, 4);
+        modeRow.Controls.Add(lblQualityCaption);
+        modeRow.Controls.Add(cmbQuality);
 
-        // Resultado da análise fica dentro da própria janela. Não abre mais uma janela separada.
-        profileSelection.Name = "profileSelection";
-        profileSelection.Visible = false;
-        root.Controls.Add(profileSelection);
+        lblVideoFormatCaption.Margin = new Padding(0, 9, 7, 0);
+        cmbVideoFormat.Width = 105;
+        cmbVideoFormat.Margin = new Padding(0, 4, 18, 4);
+        modeRow.Controls.Add(lblVideoFormatCaption);
+        modeRow.Controls.Add(cmbVideoFormat);
 
-        // Opções menos usadas ficam recolhidas para limpar a tela principal.
-        grpAdvanced.Text = "Opções avançadas";
-        grpAdvanced.Dock = DockStyle.Top;
-        grpAdvanced.AutoSize = true;
-        grpAdvanced.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        grpAdvanced.Padding = new Padding(4);
-        var advanced = new TableLayoutPanel
+        lblAudioFormatCaption.Margin = new Padding(0, 9, 7, 0);
+        cmbAudioFormat.Width = 115;
+        cmbAudioFormat.Margin = new Padding(0, 4, 18, 4);
+        modeRow.Controls.Add(lblAudioFormatCaption);
+        modeRow.Controls.Add(cmbAudioFormat);
+        actionLayout.Controls.Add(modeRow, 0, 0);
+
+        var destinationRow = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 3,
-            RowCount = 5,
-            Padding = new Padding(8)
+            BackColor = Panel,
+            Margin = new Padding(0, 7, 0, 7)
+        };
+        destinationRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        destinationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        destinationRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        destinationRow.Controls.Add(new Label
+        {
+            Text = "Salvar em",
+            AutoSize = true,
+            ForeColor = TextMuted,
+            Margin = new Padding(0, 7, 10, 0)
+        }, 0, 0);
+        lblDestination.Dock = DockStyle.Fill;
+        lblDestination.ForeColor = TextMain;
+        lblDestination.Margin = new Padding(0, 7, 8, 0);
+        destinationRow.Controls.Add(lblDestination, 1, 0);
+        destinationRow.Controls.Add(btnChangeDestination, 2, 0);
+        actionLayout.Controls.Add(destinationRow, 0, 1);
+
+        var accountRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            BackColor = Panel,
+            Margin = new Padding(0, 2, 0, 8)
+        };
+        btnAnalyzeCollection.Visible = false;
+        lblCollectionInfo.ForeColor = TextMuted;
+        lblCollectionInfo.Margin = new Padding(10, 8, 0, 0);
+        accountRow.Controls.Add(btnAnalyzeCollection);
+        accountRow.Controls.Add(lblCollectionInfo);
+        actionLayout.Controls.Add(accountRow, 0, 2);
+
+        var downloadRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 54,
+            ColumnCount = 2,
+            BackColor = Panel,
+            Margin = new Padding(0)
+        };
+        downloadRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        downloadRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+        btnDownload.Dock = DockStyle.Fill;
+        btnDownload.Text = "BAIXAR";
+        btnDownload.Font = new Font("Segoe UI Semibold", 11F, FontStyle.Bold);
+        btnDownload.BackColor = Accent;
+        btnDownload.FlatStyle = FlatStyle.Flat;
+        btnDownload.FlatAppearance.BorderColor = Accent;
+        btnStop.Dock = DockStyle.Fill;
+        btnStop.Margin = new Padding(8, 0, 0, 0);
+        downloadRow.Controls.Add(btnDownload, 0, 0);
+        downloadRow.Controls.Add(btnStop, 1, 0);
+        actionLayout.Controls.Add(downloadRow, 0, 3);
+        actionCard.Controls.Add(actionLayout);
+        root.Controls.Add(actionCard);
+
+        // A seleção do perfil continua na mesma janela, agora logo abaixo do fluxo principal.
+        profileSelection.Margin = new Padding(0, 0, 0, 10);
+        root.Controls.Add(profileSelection);
+
+        var progressCard = CreateCardPanel("progressCard");
+        progressCard.Height = 92;
+        var progressLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(14, 10, 14, 10),
+            BackColor = Panel
+        };
+        progressLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        progressLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var progressHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            BackColor = Panel
+        };
+        progressHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        progressHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        lblCurrent.ForeColor = TextMuted;
+        progressHeader.Controls.Add(lblCurrent, 0, 0);
+        lblStatus.Anchor = AnchorStyles.Right;
+        progressHeader.Controls.Add(lblStatus, 1, 0);
+        progressLayout.Controls.Add(progressHeader, 0, 0);
+        progressLayout.Controls.Add(progress, 0, 1);
+        progressCard.Controls.Add(progressLayout);
+        root.Controls.Add(progressCard);
+
+        var completedRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            BackColor = Bg,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        completedRow.Controls.Add(btnOpenLastFile);
+        completedRow.Controls.Add(btnOpenLastFolder);
+        root.Controls.Add(completedRow);
+
+        // Configurações ficam fora do caminho principal. O usuário comum não precisa vê-las.
+        grpAdvanced.Name = "grpAdvanced";
+        grpAdvanced.Text = "Configurações";
+        grpAdvanced.Dock = DockStyle.Top;
+        grpAdvanced.AutoSize = true;
+        grpAdvanced.Padding = new Padding(10);
+        var advanced = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 4,
+            RowCount = 8,
+            Padding = new Padding(6),
+            BackColor = Panel
         };
         advanced.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        advanced.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
 
-        advanced.Controls.Add(LabelFor("Temporários:"), 0, 0);
+        AddFolderRow(advanced, 0, "Vídeos:", txtVideoOutput, btnBrowseVideo, btnOpenVideo);
+        AddFolderRow(advanced, 1, "Áudios:", txtAudioOutput, btnBrowseAudio, btnOpenAudio);
+        advanced.Controls.Add(LabelFor("Temporários:"), 0, 2);
         txtTemp.Dock = DockStyle.Fill;
-        advanced.Controls.Add(txtTemp, 1, 0);
+        advanced.Controls.Add(txtTemp, 1, 2);
         btnBrowseTemp.Dock = DockStyle.Fill;
-        advanced.Controls.Add(btnBrowseTemp, 2, 0);
+        advanced.Controls.Add(btnBrowseTemp, 2, 2);
+        advanced.SetColumnSpan(btnBrowseTemp, 2);
 
-        advanced.Controls.Add(LabelFor("Cookies:"), 0, 1);
+        advanced.Controls.Add(LabelFor("Cookies:"), 0, 3);
         cmbCookies.Width = 180;
-        cmbCookies.Dock = DockStyle.Left;
-        advanced.Controls.Add(cmbCookies, 1, 1);
-        advanced.SetColumnSpan(cmbCookies, 2);
+        advanced.Controls.Add(cmbCookies, 1, 3);
+        advanced.SetColumnSpan(cmbCookies, 3);
 
-        advanced.Controls.Add(LabelFor("Se já existir:"), 0, 2);
+        advanced.Controls.Add(LabelFor("Arquivo existente:"), 0, 4);
         cmbExisting.Width = 240;
-        cmbExisting.Dock = DockStyle.Left;
-        advanced.Controls.Add(cmbExisting, 1, 2);
-        advanced.SetColumnSpan(cmbExisting, 2);
+        advanced.Controls.Add(cmbExisting, 1, 4);
+        advanced.SetColumnSpan(cmbExisting, 3);
+
+        var collectionSettings = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            BackColor = Panel
+        };
+        collectionSettings.Controls.Add(chkPlaylist);
+        collectionSettings.Controls.Add(LabelFor("Limite:"));
+        cmbCollectionLimit.Width = 90;
+        collectionSettings.Controls.Add(cmbCollectionLimit);
+        advanced.Controls.Add(collectionSettings, 0, 5);
+        advanced.SetColumnSpan(collectionSettings, 4);
 
         var checks = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
-            WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
-            Padding = new Padding(0, 4, 0, 0)
+            WrapContents = true,
+            BackColor = Panel
         };
         checks.Controls.Add(chkOrganize);
         checks.Controls.Add(chkMetadata);
@@ -274,8 +502,8 @@ public sealed class MainForm : Form
         checks.Controls.Add(chkJson);
         checks.Controls.Add(chkArchive);
         checks.Controls.Add(chkCompatibleMp4);
-        advanced.Controls.Add(checks, 0, 3);
-        advanced.SetColumnSpan(checks, 3);
+        advanced.Controls.Add(checks, 0, 6);
+        advanced.SetColumnSpan(checks, 4);
 
         var advancedActions = new FlowLayoutPanel
         {
@@ -283,80 +511,22 @@ public sealed class MainForm : Form
             AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = true,
-            Padding = new Padding(0, 4, 0, 0)
+            BackColor = Panel
         };
         advancedActions.Controls.Add(btnUpdate);
+        advancedActions.Controls.Add(btnToggleLog);
         advancedActions.Controls.Add(btnClearLog);
-        advanced.Controls.Add(advancedActions, 0, 4);
-        advanced.SetColumnSpan(advancedActions, 3);
+        advanced.Controls.Add(advancedActions, 0, 7);
+        advanced.SetColumnSpan(advancedActions, 4);
         grpAdvanced.Controls.Add(advanced);
         root.Controls.Add(grpAdvanced);
 
-        // Uma linha pequena concentra comandos de visualização e status.
-        var toolsRow = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 4,
-            Padding = new Padding(0, 4, 0, 4)
-        };
-        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        toolsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        toolsRow.Controls.Add(btnAdvanced, 0, 0);
-        toolsRow.Controls.Add(btnToggleLog, 1, 0);
-        lblStatus.Anchor = AnchorStyles.Right;
-        toolsRow.Controls.Add(lblStatus, 3, 0);
-        root.Controls.Add(toolsRow);
-
-        var progressBox = CreateGroup("Progresso");
-        progressBox.Name = "grpProgress";
-        progressBox.AutoSize = false;
-        progressBox.Height = 102;
-        var progressLayout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            Padding = new Padding(8)
-        };
-        progressLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        progressLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        lblCurrent.ForeColor = TextMuted;
-        progressLayout.Controls.Add(lblCurrent, 0, 0);
-        progressLayout.Controls.Add(progress, 0, 1);
-        progressBox.Controls.Add(progressLayout);
-        root.Controls.Add(progressBox);
-
-        var actions = new TableLayoutPanel
-        {
-            Name = "actionsRow",
-            Dock = DockStyle.Top,
-            Height = 62,
-            ColumnCount = 4,
-            Padding = new Padding(0, 4, 0, 4)
-        };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
-        btnDownload.Dock = DockStyle.Fill;
-        btnStop.Dock = DockStyle.Fill;
-        btnOpenLastFile.Dock = DockStyle.Fill;
-        btnOpenLastFolder.Dock = DockStyle.Fill;
-        actions.Controls.Add(btnDownload, 0, 0);
-        actions.Controls.Add(btnStop, 1, 0);
-        actions.Controls.Add(btnOpenLastFile, 2, 0);
-        actions.Controls.Add(btnOpenLastFolder, 3, 0);
-        root.Controls.Add(actions);
-
         grpLog.Name = "grpLog";
-        grpLog.Text = "Log";
+        grpLog.Text = "Diagnóstico";
         grpLog.Dock = DockStyle.Top;
         grpLog.AutoSize = false;
         grpLog.Height = 220;
-        grpLog.Padding = new Padding(4);
+        grpLog.Padding = new Padding(8);
         txtLog.Dock = DockStyle.Fill;
         grpLog.Controls.Add(txtLog);
         root.Controls.Add(grpLog);
@@ -369,14 +539,14 @@ public sealed class MainForm : Form
     {
         _advancedVisible = visible;
         grpAdvanced.Visible = visible;
-        btnAdvanced.Text = visible ? "OCULTAR OPÇÕES" : "OPÇÕES AVANÇADAS";
+        btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
     }
 
     private void SetLogVisible(bool visible)
     {
         _logVisible = visible;
         grpLog.Visible = visible;
-        btnToggleLog.Text = visible ? "OCULTAR LOG" : "MOSTRAR LOG";
+        btnToggleLog.Text = visible ? "Ocultar diagnóstico" : "Ver diagnóstico";
     }
 
     private void ApplyResponsiveSpacing()
@@ -385,21 +555,21 @@ public sealed class MainForm : Form
             return;
 
         var area = Screen.FromControl(this).WorkingArea;
-        var compact = area.Height <= 820 || area.Width <= 1400;
+        var compact = area.Height <= 820 || area.Width <= 1200;
         var roomy = area.Height >= 1000 && area.Width >= 1600;
 
-        SetNamedHeight("grpLinks", compact ? 125 : roomy ? 175 : 155);
-        SetNamedHeight("grpProgress", compact ? 86 : roomy ? 112 : 102);
-        SetNamedHeight("actionsRow", compact ? 54 : roomy ? 66 : 62);
-        SetNamedHeight("grpLog", compact ? 200 : roomy ? 300 : 240);
+        SetNamedHeight("linkCard", compact ? 130 : roomy ? 150 : 142);
+        SetNamedHeight("previewCard", compact ? 112 : roomy ? 126 : 120);
+        SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
+        SetNamedHeight("grpLog", compact ? 190 : roomy ? 300 : 220);
         profileSelection.ApplyResponsiveHeight(compact, roomy);
 
         var root = Controls.Find("rootLayout", true).FirstOrDefault();
         if (root is TableLayoutPanel layout)
         {
-            layout.Padding = new Padding(compact ? 10 : 14);
+            layout.Padding = new Padding(compact ? 14 : 24, compact ? 12 : 18, compact ? 14 : 24, 24);
             foreach (Control child in layout.Controls)
-                child.Margin = new Padding(0, 0, 0, compact ? 5 : 8);
+                child.Margin = new Padding(0, 0, 0, compact ? 8 : 12);
         }
     }
 
@@ -490,8 +660,10 @@ public sealed class MainForm : Form
         lblCollectionInfo.Text = "Não analisado";
         lblCollectionInfo.ForeColor = TextMuted;
         progress.Value = 0;
-        progress.DisplayText = "0%";
+        progress.DisplayText = "Pronto";
         UpdateModeUi();
+        UpdateDestinationSummary();
+        UpdateLinkPresentation();
     }
 
     private void WireEvents()
@@ -505,9 +677,25 @@ public sealed class MainForm : Form
             if (!chkPlaylist.Checked) ResetCollectionSelection();
         };
         cmbCollectionLimit.SelectedIndexChanged += (_, _) => ResetCollectionSelection();
-        cmbCookies.SelectedIndexChanged += (_, _) => ResetCollectionSelection();
-        txtUrls.TextChanged += (_, _) => ResetCollectionSelection();
-        btnPaste.Click += (_, _) => { if (Clipboard.ContainsText()) txtUrls.Text = Clipboard.GetText(); };
+        cmbCookies.SelectedIndexChanged += (_, _) =>
+        {
+            ResetCollectionSelection();
+            RestartPreviewAnalysis();
+        };
+
+        txtUrls.TextChanged += (_, _) => OnUrlsChanged();
+        btnPaste.Click += (_, _) =>
+        {
+            if (Clipboard.ContainsText())
+                txtUrls.Text = Clipboard.GetText().Trim();
+        };
+        _previewTimer.Tick += async (_, _) =>
+        {
+            _previewTimer.Stop();
+            _previewTask = AnalyzeCurrentPreviewAsync();
+            try { await _previewTask; } catch { }
+        };
+
         btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync();
         profileSelection.SelectionChanged += (_, _) => ApplyProfileSelection();
         profileSelection.HideRequested += (_, _) => profileSelection.Visible = false;
@@ -516,17 +704,39 @@ public sealed class MainForm : Form
         {
             BrowseFolder(txtVideoOutput, "Escolha a pasta dos vídeos");
             SaveDestinationSettings();
+            UpdateDestinationSummary();
         };
         btnOpenVideo.Click += (_, _) => OpenFolder(txtVideoOutput.Text);
         btnBrowseAudio.Click += (_, _) =>
         {
             BrowseFolder(txtAudioOutput, "Escolha a pasta dos áudios");
             SaveDestinationSettings();
+            UpdateDestinationSummary();
         };
         btnOpenAudio.Click += (_, _) => OpenFolder(txtAudioOutput.Text);
         btnBrowseTemp.Click += (_, _) => BrowseFolder(txtTemp, "Escolha a pasta para arquivos temporários");
+        txtVideoOutput.TextChanged += (_, _) => UpdateDestinationSummary();
+        txtAudioOutput.TextChanged += (_, _) => UpdateDestinationSummary();
         txtVideoOutput.Leave += (_, _) => SaveDestinationSettings();
         txtAudioOutput.Leave += (_, _) => SaveDestinationSettings();
+
+        btnChangeDestination.Click += (_, _) =>
+        {
+            var target = rbVideo.Checked ? txtVideoOutput : txtAudioOutput;
+            BrowseFolder(target, rbVideo.Checked ? "Escolha a pasta dos vídeos" : "Escolha a pasta dos áudios");
+            SaveDestinationSettings();
+            UpdateDestinationSummary();
+        };
+        btnOpenDownloads.Click += (_, _) =>
+        {
+            var path = rbVideo.Checked ? txtVideoOutput.Text : txtAudioOutput.Text;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                btnChangeDestination.PerformClick();
+                return;
+            }
+            OpenFolder(path);
+        };
 
         btnDownload.Click += async (_, _) => await StartDownloadAsync();
         btnStop.Click += (_, _) => StopDownload();
@@ -534,17 +744,255 @@ public sealed class MainForm : Form
         btnClearLog.Click += (_, _) => txtLog.Clear();
         btnAdvanced.Click += (_, _) => SetAdvancedVisible(!_advancedVisible);
         btnToggleLog.Click += (_, _) => SetLogVisible(!_logVisible);
-        Shown += (_, _) => FitToCurrentScreen();
+        btnOpenLastFile.Click += (_, _) => OpenLastFile();
+        btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
+
+        Shown += (_, _) =>
+        {
+            FitToCurrentScreen();
+            UpdateLinkPresentation();
+        };
         DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
         LocationChanged += (_, _) => BeginInvoke(new Action(ApplyResponsiveSpacing));
         ResizeEnd += (_, _) => ApplyResponsiveSpacing();
-        btnOpenLastFile.Click += (_, _) => OpenLastFile();
-        btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
         FormClosing += (_, _) =>
         {
             SaveDestinationSettings();
+            CancelPreview();
             StopDownload();
+            _previewTimer.Dispose();
         };
+    }
+
+    private List<string> CurrentUrls()
+        => txtUrls.Lines
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private void OnUrlsChanged()
+    {
+        ResetCollectionSelection();
+        CancelPreview();
+        UpdateLinkPresentation();
+        RestartPreviewAnalysis();
+    }
+
+    private void RestartPreviewAnalysis()
+    {
+        _previewTimer.Stop();
+        var urls = CurrentUrls();
+        if (urls.Count == 1 && YtDlpRunner.IsLikelySingleMediaUrl(urls[0]))
+            _previewTimer.Start();
+    }
+
+    private void CancelPreview()
+    {
+        _previewTimer.Stop();
+        try { _previewCts?.Cancel(); } catch { }
+        _previewCts?.Dispose();
+        _previewCts = null;
+    }
+
+    private async Task StopPreviewBeforeRunnerUseAsync()
+    {
+        var task = _previewTask;
+        CancelPreview();
+        if (task is not null && !task.IsCompleted)
+        {
+            try { await task; } catch { }
+        }
+        _previewTask = null;
+    }
+
+    private void UpdateLinkPresentation()
+    {
+        var urls = CurrentUrls();
+        picPreview.Visible = false;
+        picPreview.ImageLocation = null;
+        lblPreviewDetails.Text = string.Empty;
+
+        if (urls.Count == 0)
+        {
+            lblLinkHint.Text = "Cole um link para começar. O Plutao detecta o tipo automaticamente.";
+            lblPreviewTitle.Text = "Cole um link para começar";
+            lblPreviewMeta.Text = "Vídeo, áudio, perfil, canal ou playlist";
+            btnAnalyzeCollection.Visible = false;
+            lblCollectionInfo.Visible = false;
+            return;
+        }
+
+        if (urls.Count > 1)
+        {
+            lblLinkHint.Text = $"{urls.Count} links detectados • serão processados em sequência";
+            lblPreviewTitle.Text = $"{urls.Count} links prontos para baixar";
+            lblPreviewMeta.Text = "Escolha Vídeo ou Áudio, confirme a qualidade e clique em BAIXAR.";
+            btnAnalyzeCollection.Visible = false;
+            lblCollectionInfo.Visible = false;
+            return;
+        }
+
+        var url = urls[0];
+        if (YtDlpRunner.IsLikelySingleMediaUrl(url))
+        {
+            lblLinkHint.Text = $"{PlatformHint(url)} • mídia individual detectada";
+            lblPreviewTitle.Text = "Lendo informações do vídeo...";
+            lblPreviewMeta.Text = "A prévia fica salva em cache para abrir mais rápido depois.";
+            btnAnalyzeCollection.Visible = false;
+            lblCollectionInfo.Visible = false;
+        }
+        else if (IsLikelyCollectionUrl(url))
+        {
+            lblLinkHint.Text = $"{PlatformHint(url)} • conta, canal, página ou playlist detectada";
+            lblPreviewTitle.Text = "Conta / página detectada";
+            lblPreviewMeta.Text = "Analise o perfil para ver os vídeos, datas e escolher o que baixar.";
+            btnAnalyzeCollection.Visible = true;
+            lblCollectionInfo.Visible = true;
+            lblCollectionInfo.Text = "Pronto para analisar";
+        }
+        else
+        {
+            lblLinkHint.Text = $"{PlatformHint(url)} • link pronto";
+            lblPreviewTitle.Text = "Link pronto para baixar";
+            lblPreviewMeta.Text = "Escolha Vídeo ou Áudio e clique em BAIXAR.";
+            btnAnalyzeCollection.Visible = false;
+            lblCollectionInfo.Visible = false;
+        }
+    }
+
+    private async Task AnalyzeCurrentPreviewAsync()
+    {
+        var urls = CurrentUrls();
+        if (urls.Count != 1 || !YtDlpRunner.IsLikelySingleMediaUrl(urls[0]))
+            return;
+
+        CancelPreview();
+        _previewCts = new CancellationTokenSource();
+        var ct = _previewCts.Token;
+        var url = urls[0];
+
+        try
+        {
+            var preview = await _runner.AnalyzeMediaAsync(
+                url,
+                cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
+                LogProgress(),
+                new Progress<DownloadProgressInfo>(info =>
+                {
+                    if (!string.IsNullOrWhiteSpace(info.Stage) && info.Percent < 100)
+                        lblPreviewMeta.Text = info.Stage + "...";
+                }),
+                ct);
+
+            if (preview is null || ct.IsCancellationRequested || IsDisposed)
+                return;
+            if (!string.Equals(AppCache.NormalizeUrl(url), AppCache.NormalizeUrl(CurrentUrls().FirstOrDefault() ?? string.Empty), StringComparison.OrdinalIgnoreCase))
+                return;
+
+            SetPreview(preview);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (!ct.IsCancellationRequested)
+            {
+                lblPreviewTitle.Text = "Link pronto para baixar";
+                lblPreviewMeta.Text = "Não foi possível carregar a prévia, mas o download ainda pode funcionar.";
+                lblPreviewDetails.Text = ex.Message;
+            }
+        }
+    }
+
+    private void SetPreview(MediaPreviewInfo preview)
+    {
+        lblPreviewTitle.Text = preview.Title;
+
+        var meta = new List<string>();
+        if (!string.IsNullOrWhiteSpace(preview.Platform)) meta.Add(preview.Platform);
+        if (!string.IsNullOrWhiteSpace(preview.Creator)) meta.Add(preview.Creator);
+        if (!string.IsNullOrWhiteSpace(preview.Duration)) meta.Add(preview.Duration);
+        lblPreviewMeta.Text = string.Join("  •  ", meta);
+
+        var details = new List<string>();
+        if (!string.IsNullOrWhiteSpace(preview.PublishedDate)) details.Add($"Publicado em {preview.PublishedDate}");
+        if (preview.Views.HasValue) details.Add($"{FormatCount(preview.Views.Value)} visualizações");
+        if (preview.Likes.HasValue) details.Add($"{FormatCount(preview.Likes.Value)} curtidas");
+        if (!string.IsNullOrWhiteSpace(preview.Resolution)) details.Add(preview.Resolution);
+        lblPreviewDetails.Text = string.Join("  •  ", details);
+
+        if (!string.IsNullOrWhiteSpace(preview.ThumbnailUrl))
+        {
+            try
+            {
+                picPreview.Visible = true;
+                picPreview.ImageLocation = preview.ThumbnailUrl;
+                picPreview.LoadAsync();
+            }
+            catch
+            {
+                picPreview.Visible = false;
+            }
+        }
+    }
+
+    private void UpdateDestinationSummary()
+    {
+        var path = rbVideo.Checked ? txtVideoOutput.Text.Trim() : txtAudioOutput.Text.Trim();
+        lblDestination.Text = string.IsNullOrWhiteSpace(path)
+            ? "Escolher pasta no primeiro download"
+            : path;
+    }
+
+    private static bool IsLikelyCollectionUrl(string url)
+    {
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            return false;
+
+        var host = uri.Host.ToLowerInvariant();
+        var path = uri.AbsolutePath.Trim('/');
+        var lowerPath = path.ToLowerInvariant();
+
+        if (host.Contains("youtube.com"))
+            return lowerPath.StartsWith("@") ||
+                   lowerPath.StartsWith("channel/") ||
+                   lowerPath.StartsWith("c/") ||
+                   lowerPath.StartsWith("user/") ||
+                   lowerPath.Equals("playlist") ||
+                   uri.Query.Contains("list=", StringComparison.OrdinalIgnoreCase) && !lowerPath.Equals("watch");
+
+        if (host.Contains("instagram.com"))
+        {
+            var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length == 1 &&
+                   !parts[0].Equals("explore", StringComparison.OrdinalIgnoreCase) &&
+                   !parts[0].Equals("stories", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (host.Contains("tiktok.com"))
+            return lowerPath.StartsWith("@") && !lowerPath.Contains("/video/");
+
+        return false;
+    }
+
+    private static string PlatformHint(string url)
+    {
+        if (url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase)) return "YouTube";
+        if (url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase)) return "Instagram";
+        if (url.Contains("tiktok.com", StringComparison.OrdinalIgnoreCase)) return "TikTok";
+        if (url.Contains("x.com", StringComparison.OrdinalIgnoreCase) || url.Contains("twitter.com", StringComparison.OrdinalIgnoreCase)) return "X / Twitter";
+        if (url.Contains("facebook.com", StringComparison.OrdinalIgnoreCase)) return "Facebook";
+        return "Link detectado";
+    }
+
+    private static string FormatCount(long value)
+    {
+        if (value >= 1_000_000_000) return $"{value / 1_000_000_000d:0.#} bi";
+        if (value >= 1_000_000) return $"{value / 1_000_000d:0.#} mi";
+        if (value >= 1_000) return $"{value / 1_000d:0.#} mil";
+        return value.ToString("N0");
     }
 
     private void SaveDestinationSettings()
@@ -561,12 +1009,18 @@ public sealed class MainForm : Form
         cmbQuality.Enabled = rbVideo.Checked;
         cmbVideoFormat.Enabled = rbVideo.Checked;
         cmbAudioFormat.Enabled = rbAudio.Checked;
+        cmbQuality.Visible = rbVideo.Checked;
+        lblQualityCaption.Visible = rbVideo.Checked;
+        cmbVideoFormat.Visible = rbVideo.Checked;
+        lblVideoFormatCaption.Visible = rbVideo.Checked;
+        cmbAudioFormat.Visible = rbAudio.Checked;
+        lblAudioFormatCaption.Visible = rbAudio.Checked;
         chkCompatibleMp4.Enabled = rbVideo.Checked && string.Equals(cmbVideoFormat.SelectedItem?.ToString(), "mp4", StringComparison.OrdinalIgnoreCase);
         cmbCollectionLimit.Enabled = chkPlaylist.Checked;
-        btnAnalyzeCollection.Enabled = chkPlaylist.Checked;
 
         txtVideoOutput.ForeColor = rbVideo.Checked ? TextMain : TextMuted;
         txtAudioOutput.ForeColor = rbAudio.Checked ? TextMain : TextMuted;
+        UpdateDestinationSummary();
     }
 
     private void BrowseFolder(TextBox target, string description)
@@ -634,11 +1088,7 @@ public sealed class MainForm : Form
 
     private async Task AnalyzeCollectionAsync()
     {
-        var urls = txtUrls.Lines
-            .Select(x => x.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct()
-            .ToList();
+        var urls = CurrentUrls();
 
         if (urls.Count != 1)
         {
@@ -649,6 +1099,7 @@ public sealed class MainForm : Form
         if (!chkPlaylist.Checked)
             chkPlaylist.Checked = true;
 
+        await StopPreviewBeforeRunnerUseAsync();
         _tools.TemporaryDirectory = txtTemp.Text.Trim();
         _cts = new CancellationTokenSource();
         SetBusy(true);
@@ -713,11 +1164,7 @@ public sealed class MainForm : Form
 
     private async Task StartDownloadAsync()
     {
-        var urls = txtUrls.Lines
-            .Select(x => x.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct()
-            .ToList();
+        var urls = CurrentUrls();
 
         if (urls.Count == 0)
         {
@@ -738,12 +1185,20 @@ public sealed class MainForm : Form
         var usingSelectedUrls = sameAnalyzedProfile && _selectedCollectionUrls.Count > 0;
         var downloadUrls = usingSelectedUrls ? _selectedCollectionUrls.ToList() : urls;
 
-        var selectedOutput = rbVideo.Checked ? txtVideoOutput.Text.Trim() : txtAudioOutput.Text.Trim();
-        if (string.IsNullOrWhiteSpace(selectedOutput) || string.IsNullOrWhiteSpace(txtTemp.Text))
+        var selectedTarget = rbVideo.Checked ? txtVideoOutput : txtAudioOutput;
+        var selectedOutput = selectedTarget.Text.Trim();
+        if (string.IsNullOrWhiteSpace(selectedOutput))
         {
-            MessageBox.Show(this, "Escolha a pasta de destino e a pasta de temporários.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
+            BrowseFolder(selectedTarget, rbVideo.Checked ? "Escolha a pasta dos vídeos" : "Escolha a pasta dos áudios");
+            selectedOutput = selectedTarget.Text.Trim();
+            if (string.IsNullOrWhiteSpace(selectedOutput))
+                return;
+            SaveDestinationSettings();
+            UpdateDestinationSummary();
         }
+
+        if (string.IsNullOrWhiteSpace(txtTemp.Text))
+            txtTemp.Text = _tools.TemporaryDirectory;
 
         var options = new DownloadOptions
         {
@@ -768,6 +1223,7 @@ public sealed class MainForm : Form
             ExistingFileBehavior = SelectedExistingFileBehavior()
         };
 
+        await StopPreviewBeforeRunnerUseAsync();
         _tools.TemporaryDirectory = options.TemporaryDirectory;
         _cts = new CancellationTokenSource();
         SetBusy(true);
@@ -788,7 +1244,7 @@ public sealed class MainForm : Form
         if (options.UseArchive)
             AppendLog("Histórico anti-repetição: ativado (o mesmo ID pode ser ignorado mesmo ao mudar qualidade/formato).");
         if (options.Mode == DownloadMode.Video && string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase))
-            AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "garantir H.264/AAC" : "melhor codec disponível")}");
+            AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "automática — H.264 até 1080p / HEVC acima" : "codec original/melhor disponível")}");
 
         try
         {
@@ -804,7 +1260,7 @@ public sealed class MainForm : Form
                 lblStatus.Text = "Concluído";
                 lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
                 progress.Value = 100;
-                progress.DisplayText = "100% - concluído";
+                progress.DisplayText = "Concluído";
                 progress.Invalidate();
                 lblCurrent.Text = "Download concluído.";
                 AppendLog("Fila concluída com sucesso.");
@@ -915,6 +1371,7 @@ public sealed class MainForm : Form
     {
         try
         {
+            await StopPreviewBeforeRunnerUseAsync();
             _tools.TemporaryDirectory = txtTemp.Text.Trim();
             SetBusy(true);
             lblStatus.Text = "Atualizando...";
@@ -1006,12 +1463,24 @@ public sealed class MainForm : Form
         btnBrowseVideo.Enabled = !busy;
         btnBrowseAudio.Enabled = !busy;
         btnBrowseTemp.Enabled = !busy;
+        btnChangeDestination.Enabled = !busy;
+        btnPaste.Enabled = !busy;
         btnAnalyzeCollection.Enabled = !busy && chkPlaylist.Checked;
         btnAdvanced.Enabled = !busy;
         var hasLastFile = !string.IsNullOrWhiteSpace(_runner.LastCompletedFilePath) && File.Exists(_runner.LastCompletedFilePath);
         btnOpenLastFile.Enabled = !busy && hasLastFile;
         btnOpenLastFolder.Enabled = !busy && hasLastFile;
     }
+
+    private static Panel CreateCardPanel(string name)
+        => new()
+        {
+            Name = name,
+            Dock = DockStyle.Top,
+            BackColor = Panel,
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(0, 0, 0, 12)
+        };
 
     private static GroupBox CreateGroup(string title, bool fill = false)
         => new()
@@ -1034,17 +1503,8 @@ public sealed class MainForm : Form
 
     private static void ApplyDarkTheme(Control root)
     {
-        root.BackColor = root is TextBox or ComboBox ? Field : Bg;
-        root.ForeColor = TextMain;
-
         switch (root)
         {
-            case GroupBox:
-            case TableLayoutPanel:
-            case FlowLayoutPanel:
-                root.BackColor = Panel;
-                break;
-
             case TextBox textBox:
                 textBox.BackColor = Field;
                 textBox.ForeColor = TextMain;
@@ -1057,12 +1517,31 @@ public sealed class MainForm : Form
                 comboBox.FlatStyle = FlatStyle.Flat;
                 break;
 
+            case GroupBox:
+            case TableLayoutPanel:
+            case FlowLayoutPanel:
+                if (root.BackColor == default || root.BackColor == SystemColors.Control)
+                    root.BackColor = Panel;
+                root.ForeColor = TextMain;
+                break;
+
+            case Panel panel:
+                if (panel.Name is "linkCard" or "previewCard" or "actionCard" or "progressCard")
+                    panel.BackColor = Panel;
+                else if (panel.BackColor == default || panel.BackColor == SystemColors.Control)
+                    panel.BackColor = Bg;
+                panel.ForeColor = TextMain;
+                break;
+
             case Button button:
-                button.BackColor = Field;
+                if (button.BackColor != Accent)
+                    button.BackColor = Field;
                 button.ForeColor = TextMain;
                 button.FlatStyle = FlatStyle.Flat;
-                button.FlatAppearance.BorderColor = Border;
-                button.FlatAppearance.MouseOverBackColor = Color.FromArgb(42, 42, 42);
+                button.FlatAppearance.BorderColor = button.BackColor == Accent ? Accent : Border;
+                button.FlatAppearance.MouseOverBackColor = button.BackColor == Accent
+                    ? Color.FromArgb(128, 93, 255)
+                    : Color.FromArgb(42, 42, 42);
                 button.FlatAppearance.MouseDownBackColor = Accent;
                 break;
 
@@ -1074,6 +1553,10 @@ public sealed class MainForm : Form
             case RadioButton radioButton:
                 radioButton.BackColor = Panel;
                 radioButton.ForeColor = TextMain;
+                break;
+
+            default:
+                root.ForeColor = root.ForeColor == SystemColors.ControlText ? TextMain : root.ForeColor;
                 break;
         }
 

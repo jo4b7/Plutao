@@ -9,15 +9,12 @@ namespace Plutao;
 
 public sealed class ProfileSelectionPanel : UserControl
 {
-    private static readonly string CacheDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Plutao",
-        "thumb-cache");
-
-    private static readonly string RenderedCacheDirectory = Path.Combine(CacheDirectory, "rendered");
+    private static readonly string CacheDirectory = AppCache.ThumbnailDirectory;
+    private static readonly string RenderedCacheDirectory = AppCache.RenderedThumbnailDirectory;
     private static readonly ConcurrentDictionary<string, byte[]> MemoryCache = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, byte[]> RenderedMemoryCache = new(StringComparer.Ordinal);
     private static readonly HttpClient Http = CreateHttpClient();
+    private static int _cacheWrites;
 
     private IReadOnlyList<CollectionMediaItem> _items = Array.Empty<CollectionMediaItem>();
     private ProfileInfo? _profile;
@@ -338,6 +335,7 @@ public sealed class ProfileSelectionPanel : UserControl
         if (_profile.IsVerified == true) badges.Add("✓ Verificado");
         if (_profile.IsPrivate == true) badges.Add("Conta privada");
         else if (_profile.IsPrivate == false) badges.Add("Conta pública");
+        if (!string.IsNullOrWhiteSpace(_profile.CreatedDate)) badges.Add($"Conta criada em {_profile.CreatedDate}");
         _profileBadges.Text = string.Join("   •   ", badges);
         _profileBadges.Visible = badges.Count > 0;
 
@@ -536,8 +534,9 @@ public sealed class ProfileSelectionPanel : UserControl
             var renderedPath = RenderedCachePath(url, width, height);
             try
             {
-                if (File.Exists(renderedPath) && File.GetLastWriteTimeUtc(renderedPath) > DateTime.UtcNow.AddDays(-7))
+                if (File.Exists(renderedPath))
                 {
+                    try { File.SetLastAccessTimeUtc(renderedPath, DateTime.UtcNow); } catch { }
                     var cached = await File.ReadAllBytesAsync(renderedPath, ct).ConfigureAwait(false);
                     RenderedMemoryCache.TryAdd(renderedKey, cached);
                     return BitmapFromBytes(cached);
@@ -575,6 +574,7 @@ public sealed class ProfileSelectionPanel : UserControl
                 RenderedMemoryCache.TryAdd(renderedKey, renderedBytes);
                 Directory.CreateDirectory(RenderedCacheDirectory);
                 await File.WriteAllBytesAsync(renderedPath, renderedBytes, ct).ConfigureAwait(false);
+                ScheduleCacheTrim();
             }
             catch { }
 
@@ -608,8 +608,9 @@ public sealed class ProfileSelectionPanel : UserControl
         var cachePath = CachePath(url);
         try
         {
-            if (File.Exists(cachePath) && File.GetLastWriteTimeUtc(cachePath) > DateTime.UtcNow.AddDays(-7))
+            if (File.Exists(cachePath))
             {
+                try { File.SetLastAccessTimeUtc(cachePath, DateTime.UtcNow); } catch { }
                 var cached = await File.ReadAllBytesAsync(cachePath, ct).ConfigureAwait(false);
                 MemoryCache.TryAdd(url, cached);
                 return cached;
@@ -638,6 +639,7 @@ public sealed class ProfileSelectionPanel : UserControl
             {
                 Directory.CreateDirectory(CacheDirectory);
                 await File.WriteAllBytesAsync(cachePath, bytes, ct).ConfigureAwait(false);
+                ScheduleCacheTrim();
             }
             catch { }
             return bytes;
@@ -646,6 +648,12 @@ public sealed class ProfileSelectionPanel : UserControl
         {
             return null;
         }
+    }
+
+    private static void ScheduleCacheTrim()
+    {
+        if (Interlocked.Increment(ref _cacheWrites) % 64 == 0)
+            _ = Task.Run(AppCache.TrimThumbnailCache);
     }
 
     private static string CachePath(string url)
