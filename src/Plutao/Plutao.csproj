@@ -9,7 +9,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>Plutao</AssemblyName>
     <RootNamespace>Plutao</RootNamespace>
-    <Version>0.4.3</Version>
+    <Version>0.4.2</Version>
     <ApplicationIcon Condition="Exists('plutao.ico')">plutao.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
