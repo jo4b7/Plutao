@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.3
+
+- Links base de canais do YouTube, como `youtube.com/@usuario`, passam a abrir automaticamente as categorias reais de **Vídeos**, **Shorts** e **Lives**.
+- Links diretos `/videos`, `/shorts` e `/streams` continuam funcionando e abrem apenas a categoria correspondente.
+- As seções do canal deixam de aparecer como se fossem vídeos individuais; o Plutao consulta cada aba e junta as mídias reais, removendo duplicados.
+- A seleção de perfis/canais ganhou filtros por categoria com contagem de itens.
+- A linha inteira da lista agora pode ser clicada para selecionar ou desmarcar uma mídia; o checkbox deixa de ser o único alvo de clique.
+- Botões de seleção passam a agir sobre a categoria visível quando um filtro está aberto.
+- A prévia de vídeo passa a ler as resoluções realmente disponíveis no yt-dlp e o seletor de qualidade é atualizado automaticamente.
+- Se a maior resolução disponível for 1440p, por exemplo, 2160p deixa de aparecer para aquele vídeo.
+- O seletor mostra a resolução máxima disponível e mantém **Melhor disponível** como comportamento padrão quando ainda não há uma análise individual.
+- Botões **ABRIR ARQUIVO** e **ABRIR PASTA** ganharam largura mínima para não ter o texto cortado.
+- O layout responsivo agora usa o tamanho real da janela, diferenciando melhor janela normal de modo maximizado em telas QHD.
+- A barra de progresso continua visível durante todo o fluxo e permanece em 100% após uma conclusão bem-sucedida.
+
 ## 0.5.2
 
 - Corrige a captura do caminho do arquivo final após o yt-dlp.

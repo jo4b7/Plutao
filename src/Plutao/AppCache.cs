@@ -147,6 +147,13 @@ internal static class AppCache
             if (DateTime.UtcNow - entry.CachedAtUtc > maxAge)
                 return false;
 
+            // A v0.5.3 passou a guardar as alturas realmente disponíveis.
+            // Pré-visualizações antigas com resolução conhecida, mas sem a lista
+            // de formatos, são atualizadas uma vez para evitar opções inválidas.
+            if (entry.Preview.Height is > 0 &&
+                (entry.Preview.AvailableHeights is null || entry.Preview.AvailableHeights.Length == 0))
+                return false;
+
             preview = entry.Preview;
             return true;
         }
@@ -229,7 +236,7 @@ internal static class AppCache
     }
 
     private static string BuildCollectionKey(string url, string browserCookies, int limit)
-        => $"{NormalizeUrl(url)}|{browserCookies.Trim().ToLowerInvariant()}|{limit}";
+        => $"collection-v053-youtube-tabs1|{NormalizeUrl(url)}|{browserCookies.Trim().ToLowerInvariant()}|{limit}";
 
     public static string BuildDownloadKey(string url, DownloadOptions options)
     {

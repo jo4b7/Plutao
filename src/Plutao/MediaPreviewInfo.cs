@@ -14,7 +14,13 @@ public sealed record MediaPreviewInfo(
     int? Width = null,
     int? Height = null)
 {
+    public int[] AvailableHeights { get; init; } = Array.Empty<int>();
+
     public string Resolution => Width.HasValue && Height.HasValue && Width > 0 && Height > 0
         ? $"{Width}×{Height}"
         : string.Empty;
+
+    public int? MaximumHeight => AvailableHeights.Length > 0
+        ? AvailableHeights.Max()
+        : Height is > 0 ? Height : null;
 }

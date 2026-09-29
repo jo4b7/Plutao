@@ -25,6 +25,8 @@ public sealed class ProfileSelectionPanel : UserControl
     private readonly SemaphoreSlim _thumbnailGate = new(12, 12);
     private readonly System.Windows.Forms.Timer _thumbnailTimer = new() { Interval = 70 };
     private bool _suppressSelectionEvents;
+    private string _activeCategory = "Todos";
+    private readonly Dictionary<string, Button> _categoryButtons = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly FastDataGridView _grid = new()
     {
@@ -61,10 +63,20 @@ public sealed class ProfileSelectionPanel : UserControl
     private readonly Label _summary = new() { AutoSize = true, ForeColor = Color.FromArgb(210, 210, 210) };
     private readonly Label _loading = new() { AutoSize = true, ForeColor = Color.FromArgb(165, 165, 165), Text = "" };
 
-    private readonly Button _all = new() { Text = "Marcar todos", AutoSize = true };
-    private readonly Button _none = new() { Text = "Desmarcar todos", AutoSize = true };
+    private readonly Button _all = new() { Text = "Selecionar todos", AutoSize = true };
+    private readonly Button _none = new() { Text = "Limpar seleção", AutoSize = true };
     private readonly Button _openProfile = new() { Text = "Abrir perfil", AutoSize = true };
     private readonly Button _hide = new() { Text = "Ocultar resultados", AutoSize = true };
+    private readonly FlowLayoutPanel _categoryBar = new()
+    {
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        FlowDirection = FlowDirection.LeftToRight,
+        WrapContents = true,
+        Padding = new Padding(4, 0, 4, 6),
+        BackColor = Color.FromArgb(18, 18, 18),
+        Visible = false
+    };
 
     public event EventHandler? SelectionChanged;
     public event EventHandler? HideRequested;
@@ -101,6 +113,7 @@ public sealed class ProfileSelectionPanel : UserControl
 
         _items = items;
         _profile = profile;
+        _activeCategory = "Todos";
         _suppressSelectionEvents = true;
 
         _grid.SuspendLayout();
@@ -109,6 +122,7 @@ public sealed class ProfileSelectionPanel : UserControl
             _grid.Rows.Clear();
             PopulateProfile();
             PopulateGrid();
+            BuildCategoryButtons();
         }
         finally
         {
@@ -133,6 +147,10 @@ public sealed class ProfileSelectionPanel : UserControl
         _items = Array.Empty<CollectionMediaItem>();
         _profile = null;
         _grid.Rows.Clear();
+        _categoryBar.Controls.Clear();
+        _categoryButtons.Clear();
+        _categoryBar.Visible = false;
+        _activeCategory = "Todos";
         _summary.Text = string.Empty;
         _loading.Text = string.Empty;
         _avatar.Image = null;
@@ -141,12 +159,12 @@ public sealed class ProfileSelectionPanel : UserControl
 
     public void ApplyResponsiveHeight(bool compact, bool roomy)
     {
-        var area = Screen.FromControl(this).WorkingArea;
+        var hostHeight = FindForm()?.ClientSize.Height ?? Height;
         var targetHeight = compact
-            ? Math.Clamp((int)(area.Height * 0.45), 330, 430)
+            ? Math.Clamp((int)(hostHeight * 0.45), 330, 430)
             : roomy
-                ? Math.Clamp((int)(area.Height * 0.58), 600, 820)
-                : Math.Clamp((int)(area.Height * 0.52), 460, 650);
+                ? Math.Clamp((int)(hostHeight * 0.58), 560, 760)
+                : Math.Clamp((int)(hostHeight * 0.52), 440, 620);
 
         Height = targetHeight;
 
@@ -185,9 +203,10 @@ public sealed class ProfileSelectionPanel : UserControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
             BackColor = Color.FromArgb(18, 18, 18)
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -244,8 +263,10 @@ public sealed class ProfileSelectionPanel : UserControl
         tools.Controls.Add(_loading);
         root.Controls.Add(tools, 0, 1);
 
+        root.Controls.Add(_categoryBar, 0, 2);
+
         ConfigureGrid();
-        root.Controls.Add(_grid, 0, 2);
+        root.Controls.Add(_grid, 0, 3);
 
         foreach (var button in new[] { _all, _none, _openProfile, _hide })
         {
@@ -264,7 +285,7 @@ public sealed class ProfileSelectionPanel : UserControl
         _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(28, 28, 28);
         _grid.DefaultCellStyle.BackColor = Color.FromArgb(20, 20, 20);
         _grid.DefaultCellStyle.ForeColor = Color.FromArgb(235, 235, 235);
-        _grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(51, 40, 90);
+        _grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(34, 34, 34);
         _grid.DefaultCellStyle.SelectionForeColor = Color.White;
         _grid.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
         _grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
@@ -273,9 +294,11 @@ public sealed class ProfileSelectionPanel : UserControl
         _grid.Columns.AddRange(
             new DataGridViewCheckBoxColumn
             {
-                HeaderText = "✓",
-                Width = 38,
-                MinimumWidth = 38,
+                HeaderText = "Selecionado",
+                Width = 92,
+                MinimumWidth = 82,
+                ReadOnly = true,
+                FlatStyle = FlatStyle.Flat,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             },
             new DataGridViewImageColumn
@@ -358,6 +381,7 @@ public sealed class ProfileSelectionPanel : UserControl
             row.Cells[1].Value = null;
             row.Cells[2].Value = $"{item.Index:000}  —  {CompactText(item.Title, 240)}";
             row.Cells[3].Value = CompactDetails(item);
+            UpdateRowVisual(row);
         }
     }
 
@@ -379,14 +403,28 @@ public sealed class ProfileSelectionPanel : UserControl
             catch { }
         };
 
-        _grid.CurrentCellDirtyStateChanged += (_, _) =>
+        _grid.CellClick += (_, e) =>
         {
-            if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewCheckBoxCell)
-                _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            if (e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count)
+                return;
+            ToggleRow(e.RowIndex);
+        };
+        _grid.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Space || _grid.CurrentRow is null)
+                return;
+            ToggleRow(_grid.CurrentRow.Index);
+            e.Handled = true;
         };
         _grid.CellValueChanged += (_, e) =>
         {
-            if (e.ColumnIndex != 0 || _suppressSelectionEvents) return;
+            if (e.ColumnIndex != 0 || e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count)
+                return;
+
+            UpdateRowVisual(_grid.Rows[e.RowIndex]);
+            if (_suppressSelectionEvents)
+                return;
+
             UpdateSummary();
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         };
@@ -408,6 +446,148 @@ public sealed class ProfileSelectionPanel : UserControl
             _thumbnailTimer.Stop();
             QueueVisibleThumbnails(immediate: true);
         };
+    }
+
+    private void BuildCategoryButtons()
+    {
+        _categoryBar.Controls.Clear();
+        _categoryButtons.Clear();
+
+        var categories = _items
+            .Where(item => !string.IsNullOrWhiteSpace(item.Category))
+            .GroupBy(item => item.Category, StringComparer.OrdinalIgnoreCase)
+            .Select(group => (Name: group.Key, Count: group.Count()))
+            .OrderBy(group => CategoryOrder(group.Name))
+            .ThenBy(group => group.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (categories.Length <= 1)
+        {
+            _categoryBar.Visible = false;
+            _all.Text = "Selecionar todos";
+            _none.Text = "Limpar seleção";
+            return;
+        }
+
+        AddCategoryButton("Todos", _items.Count);
+        foreach (var category in categories)
+            AddCategoryButton(category.Name, category.Count);
+
+        _categoryBar.Visible = true;
+        UpdateCategoryButtonStyles();
+    }
+
+    private void AddCategoryButton(string category, int count)
+    {
+        var button = new Button
+        {
+            Text = $"{category}  {count:N0}",
+            Tag = category,
+            AutoSize = true,
+            MinimumSize = new Size(108, 32),
+            Margin = new Padding(0, 0, 8, 0),
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = Color.White
+        };
+        button.Click += (_, _) =>
+        {
+            _activeCategory = category;
+            ApplyCategoryFilter();
+        };
+
+        _categoryButtons[category] = button;
+        _categoryBar.Controls.Add(button);
+    }
+
+    private static int CategoryOrder(string category)
+        => category switch
+        {
+            "Vídeos" => 0,
+            "Shorts" => 1,
+            "Lives" => 2,
+            _ => 10
+        };
+
+    private void ApplyCategoryFilter()
+    {
+        _grid.SuspendLayout();
+        try
+        {
+            _grid.CurrentCell = null;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                if (row.Tag is not CollectionMediaItem item)
+                    continue;
+
+                row.Visible = _activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(item.Category, _activeCategory, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        finally
+        {
+            _grid.ResumeLayout(false);
+        }
+
+        UpdateCategoryButtonStyles();
+        UpdateSummary();
+        ScheduleVisibleThumbnailLoad();
+    }
+
+    private void UpdateCategoryButtonStyles()
+    {
+        foreach (var pair in _categoryButtons)
+        {
+            var active = pair.Key.Equals(_activeCategory, StringComparison.OrdinalIgnoreCase);
+            pair.Value.BackColor = active ? Color.FromArgb(111, 71, 255) : Color.FromArgb(28, 28, 28);
+            pair.Value.FlatAppearance.BorderColor = active ? Color.FromArgb(133, 101, 255) : Color.FromArgb(62, 62, 62);
+        }
+
+        if (_activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase))
+        {
+            _all.Text = "Selecionar todos";
+            _none.Text = "Limpar seleção";
+        }
+        else
+        {
+            _all.Text = $"Selecionar {_activeCategory}";
+            _none.Text = $"Limpar {_activeCategory}";
+        }
+    }
+
+    private void ToggleRow(int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= _grid.Rows.Count)
+            return;
+
+        var row = _grid.Rows[rowIndex];
+        if (!row.Visible)
+            return;
+
+        var selected = Convert.ToBoolean(row.Cells[0].Value ?? false);
+        _suppressSelectionEvents = true;
+        try
+        {
+            row.Cells[0].Value = !selected;
+        }
+        finally
+        {
+            _suppressSelectionEvents = false;
+        }
+
+        UpdateRowVisual(row);
+        UpdateSummary();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static void UpdateRowVisual(DataGridViewRow row)
+    {
+        var selected = Convert.ToBoolean(row.Cells[0].Value ?? false);
+        var normal = selected ? Color.FromArgb(51, 40, 90) : Color.FromArgb(20, 20, 20);
+        var focused = selected ? Color.FromArgb(65, 50, 115) : Color.FromArgb(34, 34, 34);
+        row.DefaultCellStyle.BackColor = normal;
+        row.DefaultCellStyle.SelectionBackColor = focused;
+        row.DefaultCellStyle.ForeColor = Color.FromArgb(235, 235, 235);
+        row.DefaultCellStyle.SelectionForeColor = Color.White;
     }
 
     private void ScheduleVisibleThumbnailLoad()
@@ -690,7 +870,12 @@ public sealed class ProfileSelectionPanel : UserControl
         try
         {
             foreach (DataGridViewRow row in _grid.Rows)
+            {
+                if (!row.Visible)
+                    continue;
                 row.Cells[0].Value = value;
+                UpdateRowVisual(row);
+            }
         }
         finally
         {
@@ -703,9 +888,14 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void UpdateSummary()
     {
-        var selected = _grid.Rows.Cast<DataGridViewRow>()
-            .Count(row => Convert.ToBoolean(row.Cells[0].Value ?? false));
-        _summary.Text = $"Encontrados: {_items.Count:N0}   •   Selecionados: {selected:N0}";
+        var rows = _grid.Rows.Cast<DataGridViewRow>().ToArray();
+        var selected = rows.Count(row => Convert.ToBoolean(row.Cells[0].Value ?? false));
+        var visible = rows.Count(row => row.Visible);
+        var selectedVisible = rows.Count(row => row.Visible && Convert.ToBoolean(row.Cells[0].Value ?? false));
+
+        _summary.Text = _activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase)
+            ? $"Encontrados: {_items.Count:N0}   •   Selecionados: {selected:N0}"
+            : $"{_activeCategory}: {visible:N0}   •   Selecionados nesta categoria: {selectedVisible:N0}   •   Total selecionado: {selected:N0}";
     }
 
     private void CancelImageLoading()
@@ -748,6 +938,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private static string CompactDetails(CollectionMediaItem item)
     {
         var details = new List<string>();
+        if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
         if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
         if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add(item.Duration);
         if (!string.IsNullOrWhiteSpace(item.Details)) details.Add(CompactText(item.Details, 120));
@@ -757,6 +948,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private static string FullDetails(CollectionMediaItem item)
     {
         var details = new List<string>();
+        if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
         if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
         if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add(item.Duration);
         if (!string.IsNullOrWhiteSpace(item.Details)) details.Add(item.Details);

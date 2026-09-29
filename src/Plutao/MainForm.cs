@@ -47,8 +47,8 @@ public sealed class MainForm : Form
     private readonly ProfileSelectionPanel profileSelection = new();
     private readonly Button btnAnalyzeCollection = new() { Text = "ANALISAR PERFIL / CANAL", AutoSize = true };
     private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
-    private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, Enabled = false };
-    private readonly Button btnOpenLastFolder = new() { Text = "ABRIR PASTA", Height = 44, Enabled = false };
+    private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, AutoSize = true, MinimumSize = new Size(150, 44), Enabled = false };
+    private readonly Button btnOpenLastFolder = new() { Text = "ABRIR PASTA", Height = 44, AutoSize = true, MinimumSize = new Size(140, 44), Enabled = false };
 
     private readonly DarkProgressBar progress = new() { Dock = DockStyle.Fill };
     private readonly TextBox txtLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false };
@@ -168,7 +168,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.2",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.3",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -305,7 +305,7 @@ public sealed class MainForm : Form
         modeRow.Controls.Add(rbAudio);
 
         lblQualityCaption.Margin = new Padding(0, 9, 7, 0);
-        cmbQuality.Width = 120;
+        cmbQuality.Width = 205;
         cmbQuality.Margin = new Padding(0, 4, 18, 4);
         modeRow.Controls.Add(lblQualityCaption);
         modeRow.Controls.Add(cmbQuality);
@@ -553,9 +553,10 @@ public sealed class MainForm : Form
         if (!IsHandleCreated)
             return;
 
-        var area = Screen.FromControl(this).WorkingArea;
-        var compact = area.Height <= 820 || area.Width <= 1200;
-        var roomy = area.Height >= 1000 && area.Width >= 1600;
+        var clientWidth = Math.Max(1, ClientSize.Width);
+        var clientHeight = Math.Max(1, ClientSize.Height);
+        var compact = clientHeight <= 760 || clientWidth <= 1100;
+        var roomy = clientHeight >= 900 && clientWidth >= 1600;
 
         SetNamedHeight("linkCard", compact ? 130 : roomy ? 150 : 142);
         SetNamedHeight("previewCard", compact ? 112 : roomy ? 126 : 120);
@@ -617,8 +618,7 @@ public sealed class MainForm : Form
 
     private void LoadDefaults()
     {
-        cmbQuality.Items.AddRange(new object[] { "Melhor", "2160p", "1440p", "1080p", "720p", "480p", "360p" });
-        cmbQuality.SelectedItem = "1080p";
+        ResetQualityChoices();
 
         cmbVideoFormat.Items.AddRange(new object[] { "mp4", "mkv", "webm" });
         cmbVideoFormat.SelectedItem = "mp4";
@@ -752,7 +752,7 @@ public sealed class MainForm : Form
             UpdateLinkPresentation();
         };
         DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
-        LocationChanged += (_, _) => BeginInvoke(new Action(ApplyResponsiveSpacing));
+        Resize += (_, _) => ApplyResponsiveSpacing();
         ResizeEnd += (_, _) => ApplyResponsiveSpacing();
         FormClosing += (_, _) =>
         {
@@ -773,6 +773,7 @@ public sealed class MainForm : Form
     private void OnUrlsChanged()
     {
         ResetCollectionSelection();
+        ResetQualityChoices();
         CancelPreview();
         UpdateLinkPresentation();
         RestartPreviewAnalysis();
@@ -844,8 +845,16 @@ public sealed class MainForm : Form
         else if (IsLikelyCollectionUrl(url))
         {
             lblLinkHint.Text = $"{PlatformHint(url)} • conta, canal, página ou playlist detectada";
-            lblPreviewTitle.Text = "Conta / página detectada";
-            lblPreviewMeta.Text = "Analise o perfil para ver os vídeos, datas e escolher o que baixar.";
+            if (IsLikelyYouTubeChannelUrl(url))
+            {
+                lblPreviewTitle.Text = "Canal do YouTube detectado";
+                lblPreviewMeta.Text = "Analise o canal para separar Vídeos, Shorts e Lives automaticamente.";
+            }
+            else
+            {
+                lblPreviewTitle.Text = "Conta / página detectada";
+                lblPreviewMeta.Text = "Analise o perfil para ver os vídeos, datas e escolher o que baixar.";
+            }
             btnAnalyzeCollection.Visible = true;
             lblCollectionInfo.Visible = true;
             lblCollectionInfo.Text = "Pronto para analisar";
@@ -921,6 +930,7 @@ public sealed class MainForm : Form
         if (preview.Likes.HasValue) details.Add($"{FormatCount(preview.Likes.Value)} curtidas");
         if (!string.IsNullOrWhiteSpace(preview.Resolution)) details.Add(preview.Resolution);
         lblPreviewDetails.Text = string.Join("  •  ", details);
+        ApplyAvailableQualities(preview);
 
         if (!string.IsNullOrWhiteSpace(preview.ThumbnailUrl))
         {
@@ -935,6 +945,100 @@ public sealed class MainForm : Form
                 picPreview.Visible = false;
             }
         }
+    }
+
+    private void ResetQualityChoices()
+    {
+        if (cmbQuality.IsDisposed)
+            return;
+
+        cmbQuality.BeginUpdate();
+        try
+        {
+            cmbQuality.Items.Clear();
+            cmbQuality.Items.AddRange(new object[]
+            {
+                "Melhor disponível",
+                "2160p",
+                "1440p",
+                "1080p",
+                "720p",
+                "480p",
+                "360p"
+            });
+            cmbQuality.SelectedIndex = 0;
+        }
+        finally
+        {
+            cmbQuality.EndUpdate();
+        }
+
+        lblQualityCaption.Text = "Qualidade";
+    }
+
+    private void ApplyAvailableQualities(MediaPreviewInfo preview)
+    {
+        var heights = (preview.AvailableHeights ?? Array.Empty<int>())
+            .Where(height => height > 0)
+            .Distinct()
+            .OrderByDescending(height => height)
+            .ToList();
+
+        if (heights.Count == 0 && preview.Height is > 0)
+            heights.Add(preview.Height.Value);
+
+        if (heights.Count == 0)
+        {
+            lblQualityCaption.Text = "Qualidade";
+            return;
+        }
+
+        var previous = SelectedDownloadQuality();
+        cmbQuality.BeginUpdate();
+        try
+        {
+            cmbQuality.Items.Clear();
+            for (var index = 0; index < heights.Count; index++)
+            {
+                var height = heights[index];
+                cmbQuality.Items.Add(index == 0
+                    ? $"{height}p (Melhor disponível)"
+                    : $"{height}p");
+            }
+
+            var selectedIndex = 0;
+            if (!previous.Equals("Melhor", StringComparison.OrdinalIgnoreCase))
+            {
+                var requestedDigits = new string(previous.TakeWhile(char.IsDigit).ToArray());
+                if (int.TryParse(requestedDigits, out var requestedHeight))
+                {
+                    var matchIndex = heights.FindIndex(height => height == requestedHeight);
+                    if (matchIndex >= 0)
+                        selectedIndex = matchIndex;
+                }
+            }
+
+            cmbQuality.SelectedIndex = selectedIndex;
+        }
+        finally
+        {
+            cmbQuality.EndUpdate();
+        }
+
+        lblQualityCaption.Text = $"Qualidade (máx. {heights[0]}p)";
+    }
+
+    private string SelectedDownloadQuality()
+    {
+        var text = cmbQuality.SelectedItem?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(text) ||
+            text.StartsWith("Melhor", StringComparison.OrdinalIgnoreCase))
+            return "Melhor";
+
+        var digits = new string(text.TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var height) && height > 0
+            ? $"{height}p"
+            : text;
     }
 
     private void UpdateDestinationSummary()
@@ -974,6 +1078,19 @@ public sealed class MainForm : Form
             return lowerPath.StartsWith("@") && !lowerPath.Contains("/video/");
 
         return false;
+    }
+
+    private static bool IsLikelyYouTubeChannelUrl(string url)
+    {
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) ||
+            !uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var path = uri.AbsolutePath.Trim('/');
+        return path.StartsWith("@", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("channel/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("c/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("user/", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string PlatformHint(string url)
@@ -1201,7 +1318,7 @@ public sealed class MainForm : Form
         var options = new DownloadOptions
         {
             Mode = rbVideo.Checked ? DownloadMode.Video : DownloadMode.Audio,
-            Quality = cmbQuality.SelectedItem?.ToString() ?? "1080p",
+            Quality = SelectedDownloadQuality(),
             VideoContainer = cmbVideoFormat.SelectedItem?.ToString() ?? "mp4",
             AudioFormat = cmbAudioFormat.SelectedItem?.ToString() ?? "mp3",
             OutputDirectory = selectedOutput,

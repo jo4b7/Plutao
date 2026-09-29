@@ -141,6 +141,8 @@ public sealed class YtDlpRunner
                       ?? ReadString(root, "creator")
                       ?? string.Empty;
         var canonicalUrl = ReadString(root, "webpage_url") ?? url;
+        var availableHeights = ReadAvailableVideoHeights(root);
+        var maximumResolution = ReadMaximumVideoResolution(root);
         var preview = new MediaPreviewInfo(
             canonicalUrl,
             PlatformName(url),
@@ -152,8 +154,11 @@ public sealed class YtDlpRunner
             ReadThumbnailUrl(root),
             ReadLong(root, "view_count"),
             ReadLong(root, "like_count"),
-            ReadInt(root, "width"),
-            ReadInt(root, "height"));
+            maximumResolution.Width,
+            maximumResolution.Height)
+        {
+            AvailableHeights = availableHeights
+        };
 
         AppCache.StorePreview(url, preview);
         log.Report($"[Tempo] Prévia/análise: {FormatElapsed(timer.Elapsed)}");
@@ -225,6 +230,20 @@ public sealed class YtDlpRunner
             log.Report($"[Cache] Perfil reaproveitado: {cachedItems.Count} item(ns), sem nova análise da plataforma.");
             progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{cachedItems.Count} mídia(s) em cache"));
             return cachedItems;
+        }
+
+        if (TryGetYouTubeChannelTarget(url, out var youtubeChannelBase, out var requestedYouTubeCategory))
+        {
+            var youtubeItems = await AnalyzeYouTubeChannelAsync(
+                youtubeChannelBase,
+                requestedYouTubeCategory,
+                browserCookies,
+                limit,
+                log,
+                progress,
+                ct);
+            AppCache.StoreCollection(url, browserCookies, limit, youtubeItems, LastAnalyzedProfile);
+            return youtubeItems;
         }
 
         // O extrator instagram:user do yt-dlp está quebrado nas versões atuais.
@@ -391,6 +410,283 @@ public sealed class YtDlpRunner
         log.Report($"[Análise] Encontrados {items.Count} item(ns).");
         AppCache.StoreCollection(url, browserCookies, limit, items, LastAnalyzedProfile);
         return items;
+    }
+
+    private static bool TryGetYouTubeChannelTarget(string url, out string channelBaseUrl, out string requestedCategory)
+    {
+        channelBaseUrl = string.Empty;
+        requestedCategory = string.Empty;
+
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) ||
+            !uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var segments = uri.AbsolutePath
+            .Trim('/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        if (segments.Length == 0)
+            return false;
+
+        int baseCount;
+        if (segments[0].StartsWith("@", StringComparison.Ordinal))
+        {
+            baseCount = 1;
+        }
+        else if (segments.Length >= 2 &&
+                 (segments[0].Equals("channel", StringComparison.OrdinalIgnoreCase) ||
+                  segments[0].Equals("c", StringComparison.OrdinalIgnoreCase) ||
+                  segments[0].Equals("user", StringComparison.OrdinalIgnoreCase)))
+        {
+            baseCount = 2;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (segments.Length > baseCount)
+        {
+            var tab = segments[baseCount].ToLowerInvariant();
+            requestedCategory = tab switch
+            {
+                "videos" => "Vídeos",
+                "shorts" => "Shorts",
+                "streams" or "live" => "Lives",
+                "featured" => string.Empty,
+                _ => "__unsupported__"
+            };
+
+            if (requestedCategory == "__unsupported__")
+                return false;
+        }
+
+        var basePath = string.Join("/", segments.Take(baseCount));
+        channelBaseUrl = $"https://www.youtube.com/{basePath}";
+        return true;
+    }
+
+    private async Task<IReadOnlyList<CollectionMediaItem>> AnalyzeYouTubeChannelAsync(
+        string channelBaseUrl,
+        string requestedCategory,
+        string browserCookies,
+        int limit,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
+    {
+        progress.Report(new DownloadProgressInfo(0, 0, 0, "", "", "", "Preparando canal do YouTube"));
+        log.Report("[Análise/YouTube] Canal detectado. O Plutao vai abrir as categorias automaticamente.");
+
+        await _tools.EnsureYtDlpAsync(log, progress, ct);
+        await _tools.EnsureDenoAsync(log, progress, ct);
+
+        (string Category, string Suffix)[] tabs;
+        if (string.IsNullOrWhiteSpace(requestedCategory))
+        {
+            tabs = new (string Category, string Suffix)[]
+            {
+                ("Vídeos", "videos"),
+                ("Shorts", "shorts"),
+                ("Lives", "streams")
+            };
+        }
+        else
+        {
+            tabs = requestedCategory switch
+            {
+                "Shorts" => new (string Category, string Suffix)[] { ("Shorts", "shorts") },
+                "Lives" => new (string Category, string Suffix)[] { ("Lives", "streams") },
+                _ => new (string Category, string Suffix)[] { ("Vídeos", "videos") }
+            };
+        }
+
+        var combined = new List<CollectionMediaItem>();
+        ProfileInfo? profile = null;
+
+        for (var tabIndex = 0; tabIndex < tabs.Length; tabIndex++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var tab = tabs[tabIndex];
+            var tabUrl = $"{channelBaseUrl}/{tab.Suffix}";
+            var stagePercent = 10 + (int)Math.Round(tabIndex * 70d / Math.Max(1, tabs.Length));
+            progress.Report(new DownloadProgressInfo(0, 0, stagePercent, "", "", "", $"Lendo {tab.Category}"));
+            log.Report($"[Análise/YouTube] {tab.Category}: {tabUrl}");
+
+            var result = await AnalyzeYouTubeChannelTabAsync(
+                tabUrl,
+                tab.Category,
+                browserCookies,
+                limit,
+                log,
+                ct);
+
+            if (profile is null && result.Profile is not null)
+                profile = result.Profile;
+
+            combined.AddRange(result.Items);
+            log.Report($"[Análise/YouTube] {tab.Category}: {result.Items.Count} item(ns).");
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unique = new List<CollectionMediaItem>();
+        foreach (var item in combined)
+        {
+            var key = !string.IsNullOrWhiteSpace(item.Id)
+                ? "id:" + item.Id
+                : !string.IsNullOrWhiteSpace(item.Url)
+                    ? "url:" + AppCache.NormalizeUrl(item.Url)
+                    : string.Empty;
+
+            if (string.IsNullOrWhiteSpace(key) || seen.Add(key))
+                unique.Add(item);
+        }
+
+        var finalItems = unique
+            .Select((item, index) => item with { Index = index + 1 })
+            .ToArray();
+
+        LastAnalyzedProfile = profile is null
+            ? null
+            : profile with
+            {
+                ExternalUrl = channelBaseUrl,
+                FoundVideos = finalItems.Length
+            };
+
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{finalItems.Length} mídia(s) encontrada(s)"));
+        log.Report($"[Análise/YouTube] Total: {finalItems.Length} mídia(s) após remover duplicados.");
+        return finalItems;
+    }
+
+    private async Task<(IReadOnlyList<CollectionMediaItem> Items, ProfileInfo? Profile)> AnalyzeYouTubeChannelTabAsync(
+        string tabUrl,
+        string category,
+        string browserCookies,
+        int limit,
+        IProgress<string> log,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.YtDlpPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        var args = new List<string>
+        {
+            "--flat-playlist",
+            "--dump-single-json",
+            "--skip-download",
+            "--ignore-errors",
+            "--yes-playlist",
+            "--cache-dir", _tools.CacheDirectory,
+            "--js-runtimes", $"deno:{_tools.DenoPath}"
+        };
+
+        if (limit > 0)
+        {
+            args.Add("--playlist-end");
+            args.Add(limit.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (!string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("--cookies-from-browser");
+            args.Add(browserCookies.ToLowerInvariant());
+        }
+
+        args.Add("--");
+        args.Add(tabUrl);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        _process = new Process { StartInfo = psi };
+        _process.Start();
+        using var reg = ct.Register(Stop);
+        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
+        var stderrTask = _process.StandardError.ReadToEndAsync();
+        await _process.WaitForExitAsync(ct);
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var clean = AnsiRegex.Replace(line, string.Empty);
+                if (!clean.Contains("Downloading", StringComparison.OrdinalIgnoreCase))
+                    log.Report($"[Análise/YouTube/{category}] {clean}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(stdout))
+            return (Array.Empty<CollectionMediaItem>(), null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (Array.Empty<CollectionMediaItem>(), null);
+
+            var items = new List<CollectionMediaItem>();
+            if (root.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Array)
+            {
+                var index = 0;
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.Object)
+                        continue;
+
+                    index++;
+                    var id = ReadString(entry, "id") ?? string.Empty;
+                    var title = ReadString(entry, "title")
+                                ?? ReadString(entry, "description")
+                                ?? (!string.IsNullOrWhiteSpace(id) ? id : $"Mídia {index}");
+                    var rawUrl = ReadString(entry, "webpage_url") ?? ReadString(entry, "url") ?? string.Empty;
+                    var itemUrl = NormalizeYouTubeMediaUrl(rawUrl, id);
+
+                    items.Add(new CollectionMediaItem(
+                        index,
+                        id,
+                        CleanDisplayTitle(title),
+                        FormatDuration(ReadDouble(entry, "duration")),
+                        itemUrl,
+                        ReadThumbnailUrl(entry),
+                        ReadMediaDate(entry),
+                        FormatMediaDetails(entry),
+                        category));
+                }
+            }
+
+            var profile = BuildProfileInfoFromYtDlp(root, tabUrl, items.Count);
+            return (items, profile);
+        }
+        catch (JsonException)
+        {
+            return (Array.Empty<CollectionMediaItem>(), null);
+        }
+    }
+
+    private static string NormalizeYouTubeMediaUrl(string rawUrl, string id)
+    {
+        rawUrl = (rawUrl ?? string.Empty).Trim();
+        if (Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri) &&
+            (uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+             uri.Host.Contains("youtu.be", StringComparison.OrdinalIgnoreCase)))
+            return rawUrl;
+
+        if (!string.IsNullOrWhiteSpace(id))
+            return $"https://www.youtube.com/watch?v={id}";
+
+        return rawUrl;
     }
 
     private async Task<IReadOnlyList<CollectionMediaItem>> AnalyzeInstagramProfileAsync(
@@ -643,6 +939,76 @@ public sealed class YtDlpRunner
         var uri = new Uri(url);
         var username = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries)[0];
         return $"https://www.instagram.com/{username}/";
+    }
+
+    private static int[] ReadAvailableVideoHeights(JsonElement root)
+    {
+        var heights = new HashSet<int>();
+
+        var rootHeight = ReadInt(root, "height");
+        if (rootHeight is > 0)
+            heights.Add(rootHeight.Value);
+
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("formats", out var formats) &&
+            formats.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var format in formats.EnumerateArray())
+            {
+                if (format.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var vcodec = ReadString(format, "vcodec");
+                if (string.IsNullOrWhiteSpace(vcodec) ||
+                    string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(vcodec, "images", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var height = ReadInt(format, "height");
+                if (height is > 0)
+                    heights.Add(height.Value);
+            }
+        }
+
+        return heights.OrderByDescending(x => x).ToArray();
+    }
+
+    private static (int? Width, int? Height) ReadMaximumVideoResolution(JsonElement root)
+    {
+        int? bestWidth = ReadInt(root, "width");
+        int? bestHeight = ReadInt(root, "height");
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("formats", out var formats) ||
+            formats.ValueKind != JsonValueKind.Array)
+            return (bestWidth, bestHeight);
+
+        foreach (var format in formats.EnumerateArray())
+        {
+            if (format.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var vcodec = ReadString(format, "vcodec");
+            if (string.IsNullOrWhiteSpace(vcodec) ||
+                string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(vcodec, "images", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var width = ReadInt(format, "width");
+            var height = ReadInt(format, "height");
+            if (height is not > 0)
+                continue;
+
+            if (bestHeight is null ||
+                height.Value > bestHeight.Value ||
+                (height.Value == bestHeight.Value && (width ?? 0) > (bestWidth ?? 0)))
+            {
+                bestHeight = height;
+                bestWidth = width;
+            }
+        }
+
+        return (bestWidth, bestHeight);
     }
 
     private static string? ReadString(JsonElement element, string property)

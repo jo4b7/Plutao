@@ -2,15 +2,19 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.2 — validação final obrigatória
+## v0.5.3 — qualidades reais e canais organizados
 
 A tela principal foi reorganizada para que o fluxo normal seja simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
 
-A v0.5.2 corrige um caso em que o yt-dlp podia concluir o processo sem o Plutao conseguir capturar o caminho final do arquivo. Agora o aplicativo procura o arquivo final pelo sufixo/ID/data de gravação e **não marca o download como concluído** enquanto não conseguir localizar e validar o MP4. Isso impede que AV1/VP9 + Opus escape sem a conversão automática para H.264/AAC ou HEVC/AAC.
+A v0.5.3 usa a análise do próprio yt-dlp para mostrar **somente as resoluções realmente disponíveis** em links individuais. Em canais do YouTube, basta colar o link base (`youtube.com/@usuario`): o Plutao consulta **Vídeos**, **Shorts** e **Lives**, organiza tudo por categoria e remove duplicados.
+
+Na lista de um perfil/canal, a linha inteira é clicável para selecionar ou desmarcar a mídia. Os filtros de categoria mostram contagens e os botões de seleção atuam sobre o que está visível.
+
+A validação final da v0.5.2 continua ativa: o Plutao localiza o arquivo final e só conclui um MP4 depois de validar H.264/AAC ou HEVC/AAC conforme a resolução.
 
 
 - prévia automática de links individuais com título, criador, duração, data de publicação, visualizações e curtidas quando a plataforma fornece;
-- contas/canais/perfis continuam sendo analisados e selecionados dentro da própria janela;
+- contas/canais/perfis continuam sendo analisados e selecionados dentro da própria janela, com categorias de YouTube e seleção pela linha inteira;
 - destinos ficam resumidos na tela principal e são lembrados entre execuções;
 - configurações técnicas e diagnóstico ficam recolhidos;
 - na primeira utilização, se ainda não houver pasta de destino, o Plutao pergunta onde salvar ao clicar em **BAIXAR**.
@@ -24,7 +28,7 @@ Em **MP4**, a compatibilidade é automática e não exige configuração:
 - para 1440p/2160p, a conversão HEVC tenta primeiro a **GPU AMD via AMF**; se não estiver disponível, usa `libx265` na CPU automaticamente;
 - a resolução escolhida é priorizada antes do codec. Se 2160p estiver disponível apenas em VP9/AV1, o Plutao baixa 2160p e converte depois, sem cair silenciosamente para 1080p;
 - o arquivo final é verificado novamente com `ffprobe`; o Plutao não considera concluído um MP4 que permaneça em AV1/VP9/Opus quando a regra exigir H.264/HEVC + AAC;
-- em **Melhor**, a regra é decidida pela resolução real do arquivo baixado.
+- em **Melhor disponível**, a regra é decidida pela resolução real do arquivo baixado.
 
 O `ffprobe` verifica codec e altura do arquivo antes de qualquer conversão. Arquivos que já estão no codec correto não são recodificados.
 
