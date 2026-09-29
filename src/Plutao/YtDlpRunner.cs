@@ -256,6 +256,17 @@ public sealed class YtDlpRunner
             return instagramItems;
         }
 
+        // O extrator de perfis do TikTok no yt-dlp pode falhar ao obter o
+        // secUid/"secondary user ID", mesmo quando os vídeos individuais
+        // funcionam. Para perfis usamos gallery-dl para descobrir os posts e
+        // mantemos yt-dlp para o download dos links individuais selecionados.
+        if (IsTikTokProfileUrl(url))
+        {
+            var tiktokItems = await AnalyzeTikTokProfileAsync(url, browserCookies, limit, log, progress, ct);
+            AppCache.StoreCollection(url, browserCookies, limit, tiktokItems, LastAnalyzedProfile);
+            return tiktokItems;
+        }
+
         progress.Report(new DownloadProgressInfo(0, 0, 0, "", "", "", "Preparando análise"));
         log.Report("[Análise] Preparando componentes do analisador...");
         await _tools.EnsureYtDlpAsync(log, progress, ct);
@@ -1188,6 +1199,340 @@ public sealed class YtDlpRunner
         return string.Join(" • ", details);
     }
 
+    private async Task<IReadOnlyList<CollectionMediaItem>> AnalyzeTikTokProfileAsync(
+        string url,
+        string browserCookies,
+        int limit,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
+    {
+        progress.Report(new DownloadProgressInfo(0, 0, 0, "", "", "", "Preparando análise do TikTok"));
+        log.Report("[Análise] Perfil do TikTok detectado.");
+        log.Report("[Análise/TikTok] Usando o analisador alternativo de perfis para evitar a falha de secondary user ID do yt-dlp...");
+        await _tools.EnsureGalleryDlAsync(log, progress, ct);
+
+        var profileBase = NormalizeTikTokProfileUrl(url);
+        progress.Report(new DownloadProgressInfo(0, 0, 15, "", "", "", "Listando vídeos do TikTok"));
+
+        var stdout = await RunTikTokGalleryDlAnalysisAsync(
+            profileBase,
+            browserCookies,
+            limit,
+            log,
+            ct);
+
+        var items = ExtractTikTokVideoItems(stdout, profileBase, limit, out var profile);
+        if (items.Count == 0)
+        {
+            if (string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "O TikTok não liberou a lista de vídeos desse perfil nesta sessão. " +
+                    "O Plutao já tentou o analisador alternativo; selecione Cookies: Edge, Chrome ou Firefox com o TikTok aberto/logado e tente novamente.");
+            }
+
+            throw new InvalidOperationException(
+                "O TikTok não devolveu vídeos para esse perfil. Confira se o perfil abre normalmente no navegador selecionado, " +
+                "clique em Atualizar componentes e tente ANALISAR CONTA/PÁGINA novamente.");
+        }
+
+        LastAnalyzedProfile = (profile ?? BuildTikTokFallbackProfile(profileBase)) with
+        {
+            FoundVideos = items.Count
+        };
+
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{items.Count} vídeo(s) encontrado(s)"));
+        log.Report($"[Análise/TikTok] Encontrados {items.Count} vídeo(s) únicos.");
+        return items;
+    }
+
+    private async Task<string> RunTikTokGalleryDlAnalysisAsync(
+        string url,
+        string browserCookies,
+        int limit,
+        IProgress<string> log,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.GalleryDlPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        var args = new List<string>
+        {
+            "--config-ignore",
+            "--no-colors",
+            "-j",
+            "-o", "extractor.tiktok.user.include=posts",
+            "-o", "extractor.tiktok.videos=ytdl",
+            "-o", "extractor.tiktok.photos=false",
+            "-o", "extractor.tiktok.audio=false",
+            "-o", "extractor.tiktok.posts.order-posts=desc"
+        };
+
+        if (limit > 0)
+        {
+            args.Add("-o");
+            args.Add($"extractor.tiktok.tiktok-range=1-{limit.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (!string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("--cookies-from-browser");
+            args.Add(browserCookies.ToLowerInvariant());
+        }
+
+        args.Add(url);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        _process = new Process { StartInfo = psi };
+        _process.Start();
+        using var reg = ct.Register(Stop);
+        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
+        var stderrTask = _process.StandardError.ReadToEndAsync();
+        await _process.WaitForExitAsync(ct);
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            log.Report("[Análise/TikTok] " + AnsiRegex.Replace(line, string.Empty));
+
+        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+            return string.Empty;
+
+        return stdout;
+    }
+
+    private static IReadOnlyList<CollectionMediaItem> ExtractTikTokVideoItems(
+        string stdout,
+        string profileUrl,
+        int limit,
+        out ProfileInfo? profile)
+    {
+        profile = null;
+        var items = new List<CollectionMediaItem>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(stdout))
+            return items;
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return items;
+
+            foreach (var message in document.RootElement.EnumerateArray())
+            {
+                if (limit > 0 && items.Count >= limit)
+                    break;
+                if (message.ValueKind != JsonValueKind.Array || message.GetArrayLength() < 3)
+                    continue;
+
+                var parts = message.EnumerateArray().ToArray();
+                if (parts[0].ValueKind != JsonValueKind.Number ||
+                    !parts[0].TryGetInt32(out var messageType) ||
+                    messageType != 3)
+                    continue;
+
+                var metadata = parts[^1];
+                if (metadata.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var postType = ReadString(metadata, "post_type");
+                if (string.Equals(postType, "image", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var id = ReadString(metadata, "id")
+                         ?? ReadString(metadata, "media_id")
+                         ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(id) || !seen.Add(id))
+                    continue;
+
+                var username = ReadString(metadata, "user")
+                               ?? ReadNestedString(metadata, "author", "uniqueId")
+                               ?? ExtractTikTokUsername(profileUrl);
+                var postUrl = !string.IsNullOrWhiteSpace(username)
+                    ? $"https://www.tiktok.com/@{username}/video/{id}"
+                    : $"https://www.tiktok.com/@/video/{id}";
+
+                if (parts[1].ValueKind == JsonValueKind.String)
+                {
+                    var emittedUrl = parts[1].GetString() ?? string.Empty;
+                    if (emittedUrl.StartsWith("ytdl:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var candidate = emittedUrl[5..];
+                        if (Uri.TryCreate(candidate, UriKind.Absolute, out _))
+                            postUrl = candidate;
+                    }
+                }
+
+                var description = ReadString(metadata, "desc")
+                                  ?? ReadString(metadata, "title")
+                                  ?? string.Empty;
+                var title = !string.IsNullOrWhiteSpace(description)
+                    ? CleanDisplayTitle(description)
+                    : $"TikTok {id}";
+
+                var duration = ReadNestedDouble(metadata, "video", "duration")
+                               ?? ReadDouble(metadata, "duration");
+                var thumbnail = ReadNestedString(metadata, "video", "originCover")
+                                ?? ReadNestedString(metadata, "video", "cover")
+                                ?? ReadNestedString(metadata, "video", "dynamicCover")
+                                ?? ReadString(metadata, "thumbnail")
+                                ?? string.Empty;
+                var date = ReadTikTokMediaDate(metadata);
+                var details = FormatTikTokMediaDetails(metadata);
+
+                items.Add(new CollectionMediaItem(
+                    items.Count + 1,
+                    id,
+                    title,
+                    FormatDuration(duration),
+                    postUrl,
+                    thumbnail,
+                    date,
+                    details,
+                    "Vídeos"));
+
+                profile ??= BuildTikTokProfileFromMetadata(metadata, profileUrl);
+            }
+        }
+        catch (JsonException)
+        {
+            return items;
+        }
+
+        return items;
+    }
+
+    private static string FormatTikTokMediaDetails(JsonElement metadata)
+    {
+        var details = new List<string>();
+        var views = ReadNestedLong(metadata, "stats", "playCount")
+                    ?? ReadLong(metadata, "play_count")
+                    ?? ReadLong(metadata, "view_count");
+        var likes = ReadNestedLong(metadata, "stats", "diggCount")
+                    ?? ReadLong(metadata, "like_count");
+        var comments = ReadNestedLong(metadata, "stats", "commentCount")
+                       ?? ReadLong(metadata, "comment_count");
+        var width = ReadNestedInt(metadata, "video", "width")
+                    ?? ReadInt(metadata, "width");
+        var height = ReadNestedInt(metadata, "video", "height")
+                     ?? ReadInt(metadata, "height");
+
+        if (views.HasValue) details.Add($"{views.Value:N0} visualizações");
+        if (likes.HasValue) details.Add($"{likes.Value:N0} curtidas");
+        if (comments.HasValue) details.Add($"{comments.Value:N0} comentários");
+        if (width.HasValue && height.HasValue && width > 0 && height > 0)
+            details.Add($"{width}×{height}");
+        return string.Join(" • ", details);
+    }
+
+    private static string ReadTikTokMediaDate(JsonElement metadata)
+    {
+        var date = ReadMediaDate(metadata);
+        if (!string.IsNullOrWhiteSpace(date))
+            return date;
+
+        var unix = ReadLong(metadata, "createTime");
+        if (unix is > 1_000_000_000)
+        {
+            try { return DateTimeOffset.FromUnixTimeSeconds(unix.Value).ToLocalTime().ToString("dd/MM/yyyy"); }
+            catch { }
+        }
+
+        return string.Empty;
+    }
+
+    private static ProfileInfo? BuildTikTokProfileFromMetadata(JsonElement metadata, string profileUrl)
+    {
+        if (metadata.ValueKind != JsonValueKind.Object ||
+            !metadata.TryGetProperty("author", out var author) ||
+            author.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var username = ReadString(author, "uniqueId")
+                       ?? ReadString(metadata, "user")
+                       ?? ExtractTikTokUsername(profileUrl);
+        if (string.IsNullOrWhiteSpace(username))
+            return null;
+
+        var displayName = ReadString(author, "nickname") ?? username;
+        var biography = ReadString(author, "signature") ?? string.Empty;
+        var avatar = ReadString(author, "avatarLarger")
+                     ?? ReadString(author, "avatarMedium")
+                     ?? ReadString(author, "avatarThumb")
+                     ?? string.Empty;
+
+        JsonElement authorStats = default;
+        var hasStats = metadata.TryGetProperty("authorStats", out authorStats) &&
+                       authorStats.ValueKind == JsonValueKind.Object;
+        var followers = hasStats ? ReadLong(authorStats, "followerCount") : null;
+        var following = hasStats ? ReadLong(authorStats, "followingCount") : null;
+        var posts = hasStats ? ReadLong(authorStats, "videoCount") : null;
+
+        return new ProfileInfo(
+            "TikTok",
+            username,
+            displayName,
+            biography,
+            avatar,
+            followers,
+            following,
+            posts,
+            ReadBool(author, "verified"),
+            ReadBool(author, "privateAccount"),
+            profileUrl);
+    }
+
+    private static ProfileInfo BuildTikTokFallbackProfile(string profileUrl)
+    {
+        var username = ExtractTikTokUsername(profileUrl);
+        return new ProfileInfo(
+            "TikTok",
+            username,
+            username,
+            string.Empty,
+            string.Empty,
+            ExternalUrl: profileUrl);
+    }
+
+    private static bool IsTikTokProfileUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+        if (!uri.Host.Contains("tiktok.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1 && parts[0].StartsWith("@", StringComparison.Ordinal) && parts[0].Length > 1;
+    }
+
+    private static string NormalizeTikTokProfileUrl(string url)
+    {
+        var username = ExtractTikTokUsername(url);
+        return string.IsNullOrWhiteSpace(username)
+            ? url.TrimEnd('/')
+            : $"https://www.tiktok.com/@{username}";
+    }
+
+    private static string ExtractTikTokUsername(string profileUrl)
+    {
+        if (!Uri.TryCreate(profileUrl, UriKind.Absolute, out var uri))
+            return string.Empty;
+        var segment = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+        return segment.StartsWith("@", StringComparison.Ordinal) ? segment[1..] : segment;
+    }
+
     private static bool IsInstagramProfileUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
@@ -1592,6 +1937,20 @@ public sealed class YtDlpRunner
         if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(parent, out var nested) || nested.ValueKind != JsonValueKind.Object)
             return null;
         return ReadLong(nested, child);
+    }
+
+    private static int? ReadNestedInt(JsonElement element, string parent, string child)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(parent, out var nested) || nested.ValueKind != JsonValueKind.Object)
+            return null;
+        return ReadInt(nested, child);
+    }
+
+    private static double? ReadNestedDouble(JsonElement element, string parent, string child)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(parent, out var nested) || nested.ValueKind != JsonValueKind.Object)
+            return null;
+        return ReadDouble(nested, child);
     }
 
     private static string? ReadNestedString(JsonElement element, string parent, string child)
