@@ -1154,9 +1154,9 @@ public sealed class YtDlpRunner
 
         if (exitCode == 0)
         {
-            var completedPath = _currentCompletedFilePath ?? LastCompletedFilePath;
-            if (singleMedia && CanReuseCompletedFile(options) && !string.IsNullOrWhiteSpace(completedPath) && File.Exists(completedPath))
-                AppCache.StoreReusableDownload(reuseKey, completedPath);
+            var finalCompletedPath = _currentCompletedFilePath ?? LastCompletedFilePath ?? completedPath;
+            if (singleMedia && CanReuseCompletedFile(options) && !string.IsNullOrWhiteSpace(finalCompletedPath) && File.Exists(finalCompletedPath))
+                AppCache.StoreReusableDownload(reuseKey, finalCompletedPath);
             progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Concluído"));
         }
 
