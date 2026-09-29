@@ -2,7 +2,7 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.0 — experiência de aplicativo
+## v0.5.1 — experiência de aplicativo
 
 A tela principal foi reorganizada para que o fluxo normal seja simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
 
@@ -14,11 +14,13 @@ A tela principal foi reorganizada para que o fluxo normal seja simples: **colar 
 
 ## Resolução e codec automáticos
 
-Com **Compatibilidade automática** ativada em MP4:
+Em **MP4**, a compatibilidade é automática e não exige configuração:
 
 - até **1080p** → H.264 + AAC;
 - acima de **1080p** → HEVC/H.265 + AAC;
+- para 1440p/2160p, a conversão HEVC tenta primeiro a **GPU AMD via AMF**; se não estiver disponível, usa `libx265` na CPU automaticamente;
 - a resolução escolhida é priorizada antes do codec. Se 2160p estiver disponível apenas em VP9/AV1, o Plutao baixa 2160p e converte depois, sem cair silenciosamente para 1080p;
+- o arquivo final é verificado novamente com `ffprobe`; o Plutao não considera concluído um MP4 que permaneça em AV1/VP9/Opus quando a regra exigir H.264/HEVC + AAC;
 - em **Melhor**, a regra é decidida pela resolução real do arquivo baixado.
 
 O `ffprobe` verifica codec e altura do arquivo antes de qualquer conversão. Arquivos que já estão no codec correto não são recodificados.

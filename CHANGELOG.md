@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1
+
+- Conversão HEVC de 1440p/2160p tenta usar a GPU AMD via AMF primeiro; em GPUs compatíveis, como a RX 5700 XT, a recodificação fica muito mais rápida.
+- Se AMF não estiver disponível ou falhar, o Plutao troca automaticamente para `libx265` na CPU sem exigir nenhuma opção do usuário.
+- O log informa se o HEVC foi codificado pela GPU AMD ou pelo fallback de CPU.
+- MP4 passa a aplicar a regra de compatibilidade automaticamente, sem opção extra na interface.
+- Cache de downloads foi versionado novamente para não reaproveitar arquivos incompatíveis da v0.5.0.
+- Arquivos vindos do cache são validados antes da reutilização; AV1/VP9/Opus são convertidos quando necessário.
+- Após qualquer conversão, o Plutao usa ffprobe novamente e só marca como concluído se o codec final estiver correto.
+- Até 1080p o alvo continua H.264 + AAC; acima de 1080p, HEVC/H.265 + AAC.
+- Workflow agora move a tag `latest` para o commit realmente compilado, corrigindo o aviso de commits posteriores na página de Release.
+- READMEs antigos por versão deixaram de fazer parte do pacote completo; o histórico fica no CHANGELOG.md.
+
 ## 0.5.0
 
 - Interface principal redesenhada com fluxo de aplicativo: colar link, visualizar prévia, escolher modo/qualidade/formato e baixar.

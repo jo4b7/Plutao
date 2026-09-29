@@ -168,7 +168,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.0",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.1",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -501,7 +501,6 @@ public sealed class MainForm : Form
         checks.Controls.Add(chkThumb);
         checks.Controls.Add(chkJson);
         checks.Controls.Add(chkArchive);
-        checks.Controls.Add(chkCompatibleMp4);
         advanced.Controls.Add(checks, 0, 6);
         advanced.SetColumnSpan(checks, 4);
 
@@ -656,7 +655,7 @@ public sealed class MainForm : Form
         chkOrganize.Checked = false;
         chkPlaylist.Checked = true;
         chkArchive.Checked = false;
-        chkCompatibleMp4.Checked = true;
+        chkCompatibleMp4.Checked = true; // regra automática interna para MP4
         lblCollectionInfo.Text = "Não analisado";
         lblCollectionInfo.ForeColor = TextMuted;
         progress.Value = 0;
@@ -1015,7 +1014,6 @@ public sealed class MainForm : Form
         lblVideoFormatCaption.Visible = rbVideo.Checked;
         cmbAudioFormat.Visible = rbAudio.Checked;
         lblAudioFormatCaption.Visible = rbAudio.Checked;
-        chkCompatibleMp4.Enabled = rbVideo.Checked && string.Equals(cmbVideoFormat.SelectedItem?.ToString(), "mp4", StringComparison.OrdinalIgnoreCase);
         cmbCollectionLimit.Enabled = chkPlaylist.Checked;
 
         txtVideoOutput.ForeColor = rbVideo.Checked ? TextMain : TextMuted;
@@ -1219,7 +1217,7 @@ public sealed class MainForm : Form
             SaveInfoJson = chkJson.Checked,
             UseArchive = chkArchive.Checked,
             OrganizeByCreator = chkOrganize.Checked,
-            PreferCompatibleMp4 = chkCompatibleMp4.Checked,
+            PreferCompatibleMp4 = true,
             ExistingFileBehavior = SelectedExistingFileBehavior()
         };
 
@@ -1244,7 +1242,7 @@ public sealed class MainForm : Form
         if (options.UseArchive)
             AppendLog("Histórico anti-repetição: ativado (o mesmo ID pode ser ignorado mesmo ao mudar qualidade/formato).");
         if (options.Mode == DownloadMode.Video && string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase))
-            AppendLog($"Compatibilidade MP4: {(options.PreferCompatibleMp4 ? "automática — H.264 até 1080p / HEVC acima" : "codec original/melhor disponível")}");
+            AppendLog("Compatibilidade MP4: automática — H.264 até 1080p / HEVC acima");
 
         try
         {

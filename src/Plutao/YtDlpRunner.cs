@@ -1008,26 +1008,51 @@ public sealed class YtDlpRunner
         var reuseKey = singleMedia ? AppCache.BuildDownloadKey(url, options) : string.Empty;
         if (singleMedia && CanReuseCompletedFile(options) && AppCache.TryGetReusableDownload(reuseKey, out var reusablePath))
         {
-            var finalPath = reusablePath;
-            if (options.ExistingFileBehavior == ExistingFileBehavior.KeepBoth)
+            var cacheUsable = true;
+
+            // Nunca devolve silenciosamente um MP4 antigo em AV1/VP9/Opus.
+            // Antes de reutilizar o arquivo, valida a mesma regra aplicada aos downloads novos.
+            if (ShouldGuaranteeCompatibleMp4(options))
             {
-                finalPath = AppCache.CreateDuplicatePath(reusablePath);
-                File.Copy(reusablePath, finalPath, false);
-                log.Report("[Cache] Mesmo link e mesmas opções: nova cópia criada sem baixar novamente.");
-            }
-            else
-            {
-                log.Report("[Cache] Mesmo link e mesmas opções: arquivo existente reaproveitado sem nova análise.");
+                try
+                {
+                    await EnsureCompatibleMp4Async(reusablePath, options, itemIndex, itemCount, log, progress, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    cacheUsable = false;
+                    AppCache.InvalidateReusableDownload(reuseKey);
+                    log.Report("[Cache] Arquivo salvo não passou na validação de codec; será baixado novamente. " + ex.Message);
+                }
             }
 
-            _currentCompletedFilePath = finalPath;
-            LastCompletedFilePath = finalPath;
-            AppCache.StoreReusableDownload(reuseKey, finalPath);
-            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", Path.GetFileName(finalPath), "Concluído pelo cache"));
-            timing.Total.Stop();
-            log.Report($"[Arquivo] {finalPath}");
-            log.Report($"[Tempo] Cache local: {FormatElapsed(timing.Total.Elapsed)} • Total: {FormatElapsed(timing.Total.Elapsed)}");
-            return 0;
+            if (cacheUsable)
+            {
+                var finalPath = reusablePath;
+                if (options.ExistingFileBehavior == ExistingFileBehavior.KeepBoth)
+                {
+                    finalPath = AppCache.CreateDuplicatePath(reusablePath);
+                    File.Copy(reusablePath, finalPath, false);
+                    log.Report("[Cache] Mesmo link e mesmas opções: nova cópia criada sem baixar novamente.");
+                }
+                else
+                {
+                    log.Report("[Cache] Mesmo link e mesmas opções: arquivo existente reaproveitado sem nova análise.");
+                }
+
+                _currentCompletedFilePath = finalPath;
+                LastCompletedFilePath = finalPath;
+                AppCache.StoreReusableDownload(reuseKey, finalPath);
+                progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", Path.GetFileName(finalPath), "Concluído pelo cache"));
+                timing.Total.Stop();
+                log.Report($"[Arquivo] {finalPath}");
+                log.Report($"[Tempo] Cache local: {FormatElapsed(timing.Total.Elapsed)} • Total: {FormatElapsed(timing.Total.Elapsed)}");
+                return 0;
+            }
         }
 
         var args = BuildArguments(url, options, uniqueSuffix);
@@ -1501,7 +1526,6 @@ public sealed class YtDlpRunner
 
     private static bool ShouldGuaranteeCompatibleMp4(DownloadOptions options)
         => options.Mode == DownloadMode.Video &&
-           options.PreferCompatibleMp4 &&
            string.Equals(options.VideoContainer, "mp4", StringComparison.OrdinalIgnoreCase);
 
     private async Task EnsureCompatibleMp4Async(
@@ -1518,9 +1542,10 @@ public sealed class YtDlpRunner
         var actualHeight = await ProbeHeightAsync(path, ct);
         var requestedHeight = ParseQualityHeight(options.Quality);
 
-        // A regra automática do Plutao é simples:
-        // até 1080p -> H.264; acima de 1080p -> HEVC/H.265.
-        // Para "Melhor", usamos a altura real do arquivo baixado.
+        // Regra automática:
+        // até 1080p -> H.264/AAC;
+        // acima de 1080p -> HEVC/H.265 + AAC.
+        // Em "Melhor", a altura real do arquivo decide o codec final.
         var effectiveHeight = actualHeight > 0 ? actualHeight : requestedHeight;
         var targetHevc = effectiveHeight > 1080;
         var targetCodecName = targetHevc ? "HEVC/H.265" : "H.264";
@@ -1550,8 +1575,15 @@ public sealed class YtDlpRunner
             directory,
             $".{Path.GetFileNameWithoutExtension(path)}.plutao-compatible-{Guid.NewGuid():N}.mp4");
 
-        try
+        async Task<(bool Success, string Error)> ConvertAsync(bool useAmdAmf)
         {
+            try
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+            catch { }
+
             var psi = new ProcessStartInfo
             {
                 FileName = _tools.FfmpegPath,
@@ -1571,8 +1603,29 @@ public sealed class YtDlpRunner
                 psi.ArgumentList.Add("-c:v");
                 psi.ArgumentList.Add("copy");
             }
+            else if (targetHevc && useAmdAmf)
+            {
+                // RX 5000/6000/7000 e outras GPUs AMD compatíveis podem codificar
+                // HEVC por hardware via AMF. CQP 20 preserva boa qualidade para
+                // 1440p/4K e evita uma taxa fixa baixa demais para conteúdo complexo.
+                psi.ArgumentList.Add("-c:v");
+                psi.ArgumentList.Add("hevc_amf");
+                psi.ArgumentList.Add("-quality");
+                psi.ArgumentList.Add("quality");
+                psi.ArgumentList.Add("-rc");
+                psi.ArgumentList.Add("cqp");
+                psi.ArgumentList.Add("-qp_i");
+                psi.ArgumentList.Add("20");
+                psi.ArgumentList.Add("-qp_p");
+                psi.ArgumentList.Add("20");
+                psi.ArgumentList.Add("-pix_fmt");
+                psi.ArgumentList.Add("yuv420p");
+                psi.ArgumentList.Add("-tag:v");
+                psi.ArgumentList.Add("hvc1");
+            }
             else if (targetHevc)
             {
+                // Fallback universal: se AMF não estiver disponível, usa CPU.
                 psi.ArgumentList.Add("-c:v");
                 psi.ArgumentList.Add("libx265");
                 psi.ArgumentList.Add("-preset");
@@ -1581,7 +1634,6 @@ public sealed class YtDlpRunner
                 psi.ArgumentList.Add("20");
                 psi.ArgumentList.Add("-pix_fmt");
                 psi.ArgumentList.Add("yuv420p");
-                // hvc1 melhora o reconhecimento do HEVC pelos players da Apple/Windows.
                 psi.ArgumentList.Add("-tag:v");
                 psi.ArgumentList.Add("hvc1");
             }
@@ -1623,12 +1675,68 @@ public sealed class YtDlpRunner
             _ = await stdoutTask;
             var stderr = await stderrTask;
 
-            if (_process.ExitCode != 0 || !File.Exists(tempPath))
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? "FFmpeg falhou durante a conversão." : stderr.Trim());
+            var success = _process.ExitCode == 0 && File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
+            return (success, stderr.Trim());
+        }
+
+        try
+        {
+            var usedAmdAmf = false;
+            (bool Success, string Error) result;
+
+            if (targetHevc && !videoCompatible)
+            {
+                progress.Report(new DownloadProgressInfo(
+                    itemIndex, itemCount, 99, "", "", Path.GetFileName(path), "Convertendo HEVC pela GPU"));
+                log.Report("[Compatibilidade] Tentando conversão HEVC pela GPU AMD (AMF)...");
+                result = await ConvertAsync(useAmdAmf: true);
+                usedAmdAmf = result.Success;
+
+                if (!result.Success)
+                {
+                    var shortError = ShortFfmpegError(result.Error);
+                    log.Report(string.IsNullOrWhiteSpace(shortError)
+                        ? "[Compatibilidade] AMF indisponível. Usando CPU automaticamente."
+                        : $"[Compatibilidade] AMF indisponível ({shortError}). Usando CPU automaticamente.");
+                    progress.Report(new DownloadProgressInfo(
+                        itemIndex, itemCount, 99, "", "", Path.GetFileName(path), "Convertendo HEVC pela CPU"));
+                    result = await ConvertAsync(useAmdAmf: false);
+                }
+            }
+            else
+            {
+                result = await ConvertAsync(useAmdAmf: false);
+            }
+
+            if (!result.Success || !File.Exists(tempPath))
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(result.Error) ? "FFmpeg falhou durante a conversão." : result.Error);
 
             File.Move(tempPath, path, true);
+
+            // Nunca confia apenas no exit code do FFmpeg. O arquivo final precisa
+            // realmente estar no codec prometido antes de ser marcado como concluído.
+            var finalVideoCodec = await ProbeCodecAsync(path, "v:0", ct);
+            var finalAudioCodec = await ProbeCodecAsync(path, "a:0", ct);
+            var finalHeight = await ProbeHeightAsync(path, ct);
+            var finalTargetHevc = (finalHeight > 0 ? finalHeight : effectiveHeight) > 1080;
+            var finalVideoOk = finalTargetHevc
+                ? string.Equals(finalVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(finalVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(finalVideoCodec, "h264", StringComparison.OrdinalIgnoreCase);
+            var finalAudioOk = string.IsNullOrWhiteSpace(finalAudioCodec) ||
+                               string.Equals(finalAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
+
+            if (!finalVideoOk || !finalAudioOk)
+                throw new InvalidOperationException(
+                    $"Verificação final falhou: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}.");
+
             _currentCompletedFilePath = path;
             LastCompletedFilePath = path;
+            log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, altura={(finalHeight > 0 ? finalHeight + "p" : "desconhecida")}.");
+            if (targetHevc && !videoCompatible)
+                log.Report(usedAmdAmf
+                    ? "[Compatibilidade] HEVC codificado pela GPU AMD (AMF)."
+                    : "[Compatibilidade] HEVC codificado pela CPU (fallback automático).");
             log.Report($"[Compatibilidade] Conversão concluída: {targetCodecName}/AAC.");
         }
         finally
@@ -1640,6 +1748,19 @@ public sealed class YtDlpRunner
             }
             catch { }
         }
+    }
+
+    private static string ShortFfmpegError(string error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return string.Empty;
+
+        var line = error
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim())
+            .LastOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? error.Trim();
+
+        return line.Length <= 150 ? line : line[..147] + "...";
     }
 
     private static int ParseQualityHeight(string quality)

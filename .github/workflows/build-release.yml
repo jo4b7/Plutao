@@ -59,10 +59,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Mantém a tag `latest` apontando para o mesmo commit que acabou de ser compilado.
+          # Isso evita a página de Release mostrar commits antigos enquanto os assets são novos.
+          git tag -f latest $env:GITHUB_SHA
+          git push origin refs/tags/latest --force
+
           gh release view latest *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create latest `
-              --target main `
+              --target $env:GITHUB_SHA `
               --title "Plutao - versão mais recente" `
               --notes "Compilação automática da branch main."
           }

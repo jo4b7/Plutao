@@ -235,7 +235,7 @@ internal static class AppCache
     {
         var raw = string.Join("|", new[]
         {
-            "download-cache-v050",
+            "download-cache-v051-amf1",
             NormalizeUrl(url),
             options.Mode.ToString(),
             options.Quality,
@@ -270,6 +270,18 @@ internal static class AppCache
 
             path = entry.Path;
             return true;
+        }
+    }
+
+    public static void InvalidateReusableDownload(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return;
+
+        lock (DownloadLock)
+        {
+            var cache = LoadDownloadCache();
+            if (cache.Entries.Remove(key))
+                SaveJsonAtomic(DownloadPath, cache);
         }
     }
 
