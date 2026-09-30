@@ -41,10 +41,20 @@ public sealed class MainForm : Form
     private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
     private readonly Button btnClearLog = new() { Text = "Limpar log" };
     private readonly Button btnAdvanced = new() { Text = "Configurações", AutoSize = true };
-    private readonly Button btnToggleLog = new() { Text = "Ver diagnóstico", AutoSize = true };
+    private readonly Button btnToggleLog = new() { Text = "Diagnóstico", AutoSize = true };
+    private readonly Button btnCloseSettings = new() { Text = "FECHAR", AutoSize = true };
     private readonly GroupBox grpAdvanced = new();
     private readonly GroupBox grpLog = new();
     private readonly ProfileSelectionPanel profileSelection = new();
+    private readonly TableLayoutPanel profileWorkspace = new();
+    private readonly Panel settingsDrawer = new();
+    private readonly Label lblSettingsBusyHint = new()
+    {
+        Text = "Execução em andamento • alterações feitas aqui serão usadas na próxima tarefa.",
+        AutoSize = true,
+        ForeColor = Color.FromArgb(255, 194, 92),
+        Visible = false
+    };
     private readonly Button btnAnalyzeCollection = new() { Text = "ANALISAR PERFIL / CANAL", AutoSize = true };
     private readonly Label lblCollectionInfo = new() { Text = "Não analisado", AutoSize = true };
     private readonly Button btnOpenLastFile = new() { Text = "ABRIR ARQUIVO", Height = 44, AutoSize = true, MinimumSize = new Size(150, 44), Enabled = false };
@@ -82,6 +92,7 @@ public sealed class MainForm : Form
     private readonly List<string> _selectedCollectionUrls = new();
     private bool _advancedVisible;
     private bool _logVisible;
+    private bool _busy;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
     private static readonly Color Panel = Color.FromArgb(18, 18, 18);
@@ -168,7 +179,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.4",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.5",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -187,6 +198,7 @@ public sealed class MainForm : Form
             Margin = new Padding(0, 8, 0, 0)
         };
         headerActions.Controls.Add(btnOpenDownloads);
+        headerActions.Controls.Add(btnToggleLog);
         headerActions.Controls.Add(btnAdvanced);
         header.Controls.Add(headerActions, 1, 0);
         root.Controls.Add(header);
@@ -388,9 +400,34 @@ public sealed class MainForm : Form
         actionCard.Controls.Add(actionLayout);
         root.Controls.Add(actionCard);
 
-        // A seleção do perfil continua na mesma janela, agora logo abaixo do fluxo principal.
-        profileSelection.Margin = new Padding(0, 0, 0, 10);
-        root.Controls.Add(profileSelection);
+        // Perfil e diagnóstico dividem a mesma faixa. O diagnóstico só ocupa
+        // espaço quando o usuário o abre; fechado, a lista volta a usar 100%.
+        grpLog.Name = "grpLog";
+        grpLog.Text = "Diagnóstico";
+        grpLog.Dock = DockStyle.Fill;
+        grpLog.AutoSize = false;
+        grpLog.Padding = new Padding(8);
+        grpLog.Margin = new Padding(8, 0, 0, 0);
+        txtLog.Dock = DockStyle.Fill;
+        grpLog.Controls.Add(txtLog);
+
+        profileWorkspace.Name = "profileWorkspace";
+        profileWorkspace.Dock = DockStyle.Top;
+        profileWorkspace.AutoSize = false;
+        profileWorkspace.Height = 520;
+        profileWorkspace.ColumnCount = 2;
+        profileWorkspace.RowCount = 1;
+        profileWorkspace.Margin = new Padding(0, 0, 0, 10);
+        profileWorkspace.BackColor = Bg;
+        profileWorkspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        profileWorkspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0));
+        profileWorkspace.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        profileSelection.Dock = DockStyle.Fill;
+        profileSelection.Margin = new Padding(0);
+        profileWorkspace.Controls.Add(profileSelection, 0, 0);
+        profileWorkspace.Controls.Add(grpLog, 1, 0);
+        root.Controls.Add(profileWorkspace);
 
         var progressCard = CreateCardPanel("progressCard");
         progressCard.Height = 92;
@@ -513,22 +550,83 @@ public sealed class MainForm : Form
             BackColor = Panel
         };
         advancedActions.Controls.Add(btnUpdate);
-        advancedActions.Controls.Add(btnToggleLog);
         advancedActions.Controls.Add(btnClearLog);
         advanced.Controls.Add(advancedActions, 0, 7);
         advanced.SetColumnSpan(advancedActions, 4);
         grpAdvanced.Controls.Add(advanced);
-        root.Controls.Add(grpAdvanced);
 
-        grpLog.Name = "grpLog";
-        grpLog.Text = "Diagnóstico";
-        grpLog.Dock = DockStyle.Top;
-        grpLog.AutoSize = false;
-        grpLog.Height = 220;
-        grpLog.Padding = new Padding(8);
-        txtLog.Dock = DockStyle.Fill;
-        grpLog.Controls.Add(txtLog);
-        root.Controls.Add(grpLog);
+        // Configurações em gaveta lateral: não empurram o usuário para o fim da
+        // página e continuam acessíveis durante análise/download.
+        settingsDrawer.Name = "settingsDrawer";
+        settingsDrawer.BackColor = Panel;
+        settingsDrawer.BorderStyle = BorderStyle.FixedSingle;
+        settingsDrawer.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right;
+        settingsDrawer.Visible = false;
+
+        var settingsLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Panel,
+            Padding = new Padding(10)
+        };
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+        settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var settingsHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            BackColor = Panel
+        };
+        settingsHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        settingsHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        settingsHeader.Controls.Add(new Label
+        {
+            Text = "Configurações",
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 15F, FontStyle.Bold),
+            ForeColor = TextMain,
+            Margin = new Padding(2, 10, 0, 0)
+        }, 0, 0);
+        btnCloseSettings.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        settingsHeader.Controls.Add(btnCloseSettings, 1, 0);
+        settingsLayout.Controls.Add(settingsHeader, 0, 0);
+
+        var settingsScroll = new Panel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            BackColor = Panel,
+            Padding = new Padding(0, 4, 0, 0)
+        };
+        var settingsContent = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Panel,
+            Padding = new Padding(0),
+            Margin = new Padding(0)
+        };
+        settingsContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        settingsContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settingsContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        lblSettingsBusyHint.MaximumSize = new Size(460, 44);
+        lblSettingsBusyHint.Margin = new Padding(8, 2, 8, 8);
+        settingsContent.Controls.Add(lblSettingsBusyHint, 0, 0);
+        grpAdvanced.Dock = DockStyle.Top;
+        grpAdvanced.AutoSize = true;
+        grpAdvanced.Margin = new Padding(0);
+        settingsContent.Controls.Add(grpAdvanced, 0, 1);
+        settingsScroll.Controls.Add(settingsContent);
+        settingsLayout.Controls.Add(settingsScroll, 0, 1);
+        settingsDrawer.Controls.Add(settingsLayout);
+        Controls.Add(settingsDrawer);
+        settingsDrawer.BringToFront();
 
         SetAdvancedVisible(false);
         SetLogVisible(false);
@@ -537,15 +635,66 @@ public sealed class MainForm : Form
     private void SetAdvancedVisible(bool visible)
     {
         _advancedVisible = visible;
-        grpAdvanced.Visible = visible;
+        settingsDrawer.Visible = visible;
         btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
+        if (visible)
+        {
+            PositionSettingsDrawer();
+            settingsDrawer.BringToFront();
+        }
     }
 
     private void SetLogVisible(bool visible)
     {
         _logVisible = visible;
-        grpLog.Visible = visible;
-        btnToggleLog.Text = visible ? "Ocultar diagnóstico" : "Ver diagnóstico";
+        btnToggleLog.Text = visible ? "Ocultar diagnóstico" : "Diagnóstico";
+        UpdateWorkspaceLayout();
+    }
+
+    private void UpdateWorkspaceLayout()
+    {
+        var profileVisible = profileSelection.Visible;
+        profileWorkspace.Visible = profileVisible || _logVisible;
+        grpLog.Visible = _logVisible;
+
+        if (_logVisible && profileVisible)
+        {
+            var diagnosticPercent = ClientSize.Width >= 1600 ? 34 : ClientSize.Width >= 1100 ? 30 : 28;
+            profileWorkspace.ColumnStyles[0].SizeType = SizeType.Percent;
+            profileWorkspace.ColumnStyles[0].Width = 100 - diagnosticPercent;
+            profileWorkspace.ColumnStyles[1].SizeType = SizeType.Percent;
+            profileWorkspace.ColumnStyles[1].Width = diagnosticPercent;
+            grpLog.Margin = new Padding(8, 0, 0, 0);
+        }
+        else if (_logVisible)
+        {
+            profileWorkspace.ColumnStyles[0].SizeType = SizeType.Absolute;
+            profileWorkspace.ColumnStyles[0].Width = 0;
+            profileWorkspace.ColumnStyles[1].SizeType = SizeType.Percent;
+            profileWorkspace.ColumnStyles[1].Width = 100;
+            grpLog.Margin = new Padding(0);
+        }
+        else
+        {
+            profileWorkspace.ColumnStyles[0].SizeType = SizeType.Percent;
+            profileWorkspace.ColumnStyles[0].Width = 100;
+            profileWorkspace.ColumnStyles[1].SizeType = SizeType.Absolute;
+            profileWorkspace.ColumnStyles[1].Width = 0;
+            grpLog.Margin = new Padding(0);
+        }
+    }
+
+    private void PositionSettingsDrawer()
+    {
+        if (!IsHandleCreated)
+            return;
+
+        var width = Math.Clamp((int)(ClientSize.Width * 0.38), 390, 520);
+        width = Math.Min(width, Math.Max(320, ClientSize.Width - 40));
+        settingsDrawer.Width = width;
+        settingsDrawer.Height = ClientSize.Height;
+        settingsDrawer.Left = Math.Max(0, ClientSize.Width - width);
+        settingsDrawer.Top = 0;
     }
 
     private void ApplyResponsiveSpacing()
@@ -561,8 +710,10 @@ public sealed class MainForm : Form
         SetNamedHeight("linkCard", compact ? 130 : roomy ? 150 : 142);
         SetNamedHeight("previewCard", compact ? 112 : roomy ? 126 : 120);
         SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
-        SetNamedHeight("grpLog", compact ? 190 : roomy ? 300 : 220);
         profileSelection.ApplyResponsiveHeight(compact, roomy);
+        profileWorkspace.Height = profileSelection.Height;
+        UpdateWorkspaceLayout();
+        PositionSettingsDrawer();
 
         var root = Controls.Find("rootLayout", true).FirstOrDefault();
         if (root is TableLayoutPanel layout)
@@ -673,9 +824,20 @@ public sealed class MainForm : Form
         chkPlaylist.CheckedChanged += (_, _) =>
         {
             UpdateModeUi();
-            if (!chkPlaylist.Checked) ResetCollectionSelection();
+            if (!chkPlaylist.Checked)
+            {
+                ResetCollectionSelection();
+            }
+            else
+            {
+                RestartPreviewAnalysis();
+            }
         };
-        cmbCollectionLimit.SelectedIndexChanged += (_, _) => ResetCollectionSelection();
+        cmbCollectionLimit.SelectedIndexChanged += (_, _) =>
+        {
+            ResetCollectionSelection();
+            RestartPreviewAnalysis();
+        };
         cmbCookies.SelectedIndexChanged += (_, _) =>
         {
             ResetCollectionSelection();
@@ -691,13 +853,31 @@ public sealed class MainForm : Form
         _previewTimer.Tick += async (_, _) =>
         {
             _previewTimer.Stop();
-            _previewTask = AnalyzeCurrentPreviewAsync();
-            try { await _previewTask; } catch { }
+            if (_busy)
+                return;
+
+            var urls = CurrentUrls();
+            if (urls.Count != 1)
+                return;
+
+            if (YtDlpRunner.IsLikelySingleMediaUrl(urls[0]))
+            {
+                _previewTask = AnalyzeCurrentPreviewAsync();
+                try { await _previewTask; } catch { }
+            }
+            else if (IsLikelyCollectionUrl(urls[0]))
+            {
+                try { await AnalyzeCollectionAsync(automatic: true); } catch { }
+            }
         };
 
-        btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync();
+        btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync(automatic: false);
         profileSelection.SelectionChanged += (_, _) => ApplyProfileSelection();
-        profileSelection.HideRequested += (_, _) => profileSelection.Visible = false;
+        profileSelection.HideRequested += (_, _) =>
+        {
+            profileSelection.Visible = false;
+            UpdateWorkspaceLayout();
+        };
 
         btnBrowseVideo.Click += (_, _) =>
         {
@@ -742,6 +922,7 @@ public sealed class MainForm : Form
         btnUpdate.Click += async (_, _) => await RunToolActionAsync();
         btnClearLog.Click += (_, _) => txtLog.Clear();
         btnAdvanced.Click += (_, _) => SetAdvancedVisible(!_advancedVisible);
+        btnCloseSettings.Click += (_, _) => SetAdvancedVisible(false);
         btnToggleLog.Click += (_, _) => SetLogVisible(!_logVisible);
         btnOpenLastFile.Click += (_, _) => OpenLastFile();
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
@@ -752,7 +933,11 @@ public sealed class MainForm : Form
             UpdateLinkPresentation();
         };
         DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
-        Resize += (_, _) => ApplyResponsiveSpacing();
+        Resize += (_, _) =>
+        {
+            ApplyResponsiveSpacing();
+            PositionSettingsDrawer();
+        };
         ResizeEnd += (_, _) => ApplyResponsiveSpacing();
         FormClosing += (_, _) =>
         {
@@ -783,7 +968,10 @@ public sealed class MainForm : Form
     {
         _previewTimer.Stop();
         var urls = CurrentUrls();
-        if (urls.Count == 1 && YtDlpRunner.IsLikelySingleMediaUrl(urls[0]))
+        if (_busy || urls.Count != 1)
+            return;
+
+        if (YtDlpRunner.IsLikelySingleMediaUrl(urls[0]) || IsLikelyCollectionUrl(urls[0]))
             _previewTimer.Start();
     }
 
@@ -848,16 +1036,17 @@ public sealed class MainForm : Form
             if (IsLikelyYouTubeChannelUrl(url))
             {
                 lblPreviewTitle.Text = "Canal do YouTube detectado";
-                lblPreviewMeta.Text = "Analise o canal para separar Vídeos, Shorts e Lives automaticamente.";
+                lblPreviewMeta.Text = "O Plutao vai analisar automaticamente Vídeos, Shorts e Lives.";
             }
             else
             {
                 lblPreviewTitle.Text = "Conta / página detectada";
-                lblPreviewMeta.Text = "Analise o perfil para ver os vídeos, datas e escolher o que baixar.";
+                lblPreviewMeta.Text = "O Plutao vai analisar automaticamente o perfil e listar as mídias.";
             }
-            btnAnalyzeCollection.Visible = true;
+            btnAnalyzeCollection.Visible = false;
+            btnAnalyzeCollection.Text = "TENTAR NOVAMENTE";
             lblCollectionInfo.Visible = true;
-            lblCollectionInfo.Text = "Pronto para analisar";
+            lblCollectionInfo.Text = "Análise automática aguardando...";
         }
         else
         {
@@ -1172,6 +1361,7 @@ public sealed class MainForm : Form
         _selectedPlaylistItems = string.Empty;
         _selectedCollectionUrls.Clear();
         profileSelection.ClearData();
+        UpdateWorkspaceLayout();
         if (!IsDisposed)
             lblCollectionInfo.Text = "Não analisado";
     }
@@ -1201,15 +1391,26 @@ public sealed class MainForm : Form
         lblCollectionInfo.Text = $"{profileSelection.TotalItems} encontrados • {selectedItems.Length} selecionados";
     }
 
-    private async Task AnalyzeCollectionAsync()
+    private async Task AnalyzeCollectionAsync(bool automatic = false)
     {
+        if (_busy && automatic)
+            return;
+
         var urls = CurrentUrls();
 
         if (urls.Count != 1)
         {
-            MessageBox.Show(this, "Para analisar uma conta/página, deixe exatamente um link na caixa de links.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!automatic)
+                MessageBox.Show(this, "Para analisar uma conta/página, deixe exatamente um link na caixa de links.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
+
+        var targetUrl = urls[0];
+        if (automatic &&
+            profileSelection.HasData &&
+            !string.IsNullOrWhiteSpace(_analyzedCollectionUrl) &&
+            string.Equals(AppCache.NormalizeUrl(targetUrl), AppCache.NormalizeUrl(_analyzedCollectionUrl), StringComparison.OrdinalIgnoreCase))
+            return;
 
         if (!chkPlaylist.Checked)
             chkPlaylist.Checked = true;
@@ -1218,15 +1419,18 @@ public sealed class MainForm : Form
         _tools.TemporaryDirectory = txtTemp.Text.Trim();
         _cts = new CancellationTokenSource();
         SetBusy(true);
+        btnAnalyzeCollection.Visible = false;
+        lblCollectionInfo.Visible = true;
+        lblCollectionInfo.Text = automatic ? "Analisando automaticamente..." : "Analisando...";
         lblStatus.Text = "Analisando...";
         lblStatus.ForeColor = TextMuted;
         lblCurrent.Text = "Listando vídeos da página/conta...";
-        AppendLog($"[Análise] Iniciando: {urls[0]}");
+        AppendLog($"[Análise] Iniciando: {targetUrl}");
 
         try
         {
             var items = await _runner.AnalyzeCollectionAsync(
-                urls[0],
+                targetUrl,
                 cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
                 SelectedCollectionLimit(),
                 LogProgress(),
@@ -1236,17 +1440,26 @@ public sealed class MainForm : Form
             if (items.Count == 0)
             {
                 lblCollectionInfo.Text = "0 vídeos encontrados";
-                SetLogVisible(true);
-                MessageBox.Show(this, "Nenhum vídeo foi encontrado. Confira o log; alguns perfis exigem Cookies do navegador.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                btnAnalyzeCollection.Text = "TENTAR NOVAMENTE";
+                btnAnalyzeCollection.Visible = true;
+                if (!automatic)
+                    MessageBox.Show(this, "Nenhum vídeo foi encontrado. Confira o diagnóstico; alguns perfis exigem Cookies do navegador.", "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            _analyzedCollectionUrl = urls[0];
+            // Se o link mudou durante a análise, ignora o resultado antigo.
+            var currentUrl = CurrentUrls().Count == 1 ? CurrentUrls()[0] : string.Empty;
+            if (!string.Equals(AppCache.NormalizeUrl(targetUrl), AppCache.NormalizeUrl(currentUrl), StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _analyzedCollectionUrl = targetUrl;
             profileSelection.LoadData(items, _runner.LastAnalyzedProfile);
+            UpdateWorkspaceLayout();
             ApplyResponsiveSpacing();
             ApplyProfileSelection();
 
             lblCollectionInfo.Text = $"{items.Count} encontrados • {items.Count} selecionados";
+            btnAnalyzeCollection.Visible = false;
             AppendLog($"[Análise] {items.Count} encontrados; seleção exibida na tela principal.");
 
             lblStatus.Text = "Análise concluída";
@@ -1265,9 +1478,12 @@ public sealed class MainForm : Form
             lblStatus.Text = "Erro";
             lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
             lblCurrent.Text = "Não foi possível listar os vídeos.";
-            SetLogVisible(true);
+            lblCollectionInfo.Text = "Falha na análise automática";
+            btnAnalyzeCollection.Text = "TENTAR NOVAMENTE";
+            btnAnalyzeCollection.Visible = true;
             AppendLog("[Análise] ERRO: " + ex.Message);
-            MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!automatic)
+                MessageBox.Show(this, ex.Message, "Plutao", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -1386,8 +1602,7 @@ public sealed class MainForm : Form
             {
                 lblStatus.Text = "Concluído com erro";
                 lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
-                lblCurrent.Text = "Um ou mais links falharam. Confira o log.";
-                SetLogVisible(true);
+                lblCurrent.Text = "Um ou mais links falharam. Abra Diagnóstico para ver os detalhes.";
                 AppendLog("Fila concluída com erro(s). Confira as mensagens acima.");
             }
         }
@@ -1402,8 +1617,7 @@ public sealed class MainForm : Form
         {
             lblStatus.Text = "Erro";
             lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
-            lblCurrent.Text = "Erro durante o download.";
-            SetLogVisible(true);
+            lblCurrent.Text = "Erro durante o download. Abra Diagnóstico para ver os detalhes.";
             AppendLog("ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -1512,7 +1726,6 @@ public sealed class MainForm : Form
         {
             lblStatus.Text = "Erro";
             lblStatus.ForeColor = Color.FromArgb(255, 92, 92);
-            SetLogVisible(true);
             AppendLog("ERRO: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -1572,16 +1785,25 @@ public sealed class MainForm : Form
 
     private void SetBusy(bool busy)
     {
+        _busy = busy;
         btnDownload.Enabled = !busy;
         btnStop.Enabled = busy;
+
+        // Atualizar binários em uso continua bloqueado, mas a gaveta de
+        // configurações e seus campos permanecem acessíveis. Mudanças feitas
+        // durante uma execução valem para a próxima tarefa.
         btnUpdate.Enabled = !busy;
-        btnBrowseVideo.Enabled = !busy;
-        btnBrowseAudio.Enabled = !busy;
-        btnBrowseTemp.Enabled = !busy;
-        btnChangeDestination.Enabled = !busy;
+        btnBrowseVideo.Enabled = true;
+        btnBrowseAudio.Enabled = true;
+        btnBrowseTemp.Enabled = true;
+        btnChangeDestination.Enabled = true;
         btnPaste.Enabled = !busy;
         btnAnalyzeCollection.Enabled = !busy && chkPlaylist.Checked;
-        btnAdvanced.Enabled = !busy;
+        btnAdvanced.Enabled = true;
+        btnToggleLog.Enabled = true;
+        btnCloseSettings.Enabled = true;
+        lblSettingsBusyHint.Visible = busy;
+
         var hasLastFile = !string.IsNullOrWhiteSpace(_runner.LastCompletedFilePath) && File.Exists(_runner.LastCompletedFilePath);
         btnOpenLastFile.Enabled = !busy && hasLastFile;
         btnOpenLastFolder.Enabled = !busy && hasLastFile;

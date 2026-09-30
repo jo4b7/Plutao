@@ -1,7 +1,21 @@
 # Changelog
 
+## 0.5.5
+
+- Links de perfil/canal compatíveis passam a ser analisados automaticamente após o usuário colar o link; não é mais obrigatório clicar em **ANALISAR PERFIL / CANAL**.
+- Em caso de falha na análise automática, o botão aparece como **TENTAR NOVAMENTE**; o diagnóstico continua fechado até o usuário ativá-lo.
+- **Configurações** deixam de aparecer no fim da página e passam para uma gaveta lateral sobre a janela principal.
+- A gaveta de configurações pode ser aberta durante download, análise de perfil e complementação de metadados; alterações feitas durante uma execução valem para a próxima tarefa.
+- O botão **Diagnóstico** fica disponível no cabeçalho e o painel de log aparece ao lado da área de perfil/vídeos somente quando ativado.
+- Ao fechar o diagnóstico, a lista de vídeos recupera automaticamente toda a largura disponível.
+- A coluna **Informações** foi reorganizada para manter a duração visível, com quebra de linha para métricas longas como visualizações, curtidas, comentários e resolução.
+- A lista de vídeos ganhou alturas de linha e larguras responsivas melhores quando o diagnóstico está aberto.
+- Mantidas as correções da v0.5.4 para metadados do Instagram e análise alternativa de perfis do TikTok.
+
 ## 0.5.4
 
+- Perfis do TikTok passam a usar um analisador alternativo com `gallery-dl` quando o yt-dlp falha ao obter o `secondary user ID`/`secUid`; os links individuais continuam sendo baixados pelo yt-dlp.
+- A lista de perfil do TikTok tenta trazer duração, visualizações, curtidas, comentários, resolução, data e miniatura quando a plataforma fornece esses dados.
 - Perfis do Instagram continuam sendo listados pelo `gallery-dl`, mas agora o Plutao completa os metadados de cada vídeo com o `yt-dlp` sem baixar a mídia.
 - A lista de vídeos do Instagram passa a mostrar **duração** e **visualizações** quando o Instagram/yt-dlp disponibiliza esses dados.
 - Quando a plataforma não entrega uma dessas informações, a interface mostra `—` em vez de simplesmente deixar o campo sumir.

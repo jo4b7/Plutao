@@ -2,24 +2,24 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.4 — metadados completos do Instagram
+## v0.5.5 — fluxo automático e painéis laterais
 
-A tela principal foi reorganizada para que o fluxo normal seja simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
+A tela principal mantém o fluxo simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
 
-A v0.5.4 mantém as qualidades reais e a organização de canais da v0.5.3 e melhora a análise de perfis do Instagram. O `gallery-dl` continua descobrindo rapidamente os posts/reels e o Plutao usa o `yt-dlp` apenas para completar os metadados dos vídeos, sem baixar a mídia durante a análise.
+Perfis, contas e canais compatíveis agora são analisados automaticamente depois que o link é colado. O botão de análise deixa de ser uma etapa obrigatória e aparece como **TENTAR NOVAMENTE** apenas quando a análise automática falha.
 
-Na lista do Instagram, duração e visualizações aparecem quando a plataforma fornece esses dados. Quando um valor realmente não está disponível, o Plutao mostra `—` para deixar claro que o dado não foi informado. Curtidas, resolução, data e miniatura continuam sendo preservadas.
+O **Diagnóstico** não fica mais no fim da página: ele abre ao lado da área de perfil/vídeos somente quando solicitado. Ao fechá-lo, a lista recupera toda a largura. A coluna **Informações** prioriza a duração e quebra métricas longas em linhas para evitar texto cortado.
 
-Em canais do YouTube, basta colar o link base (`youtube.com/@usuario`): o Plutao consulta **Vídeos**, **Shorts** e **Lives**, organiza tudo por categoria e remove duplicados. A linha inteira continua clicável para selecionar ou desmarcar a mídia.
+As **Configurações** ficam em uma gaveta lateral que pode ser aberta mesmo durante downloads ou análises. Opções que podem ser alteradas continuam acessíveis; mudanças feitas durante uma execução entram na próxima tarefa, enquanto a atualização dos binários permanece bloqueada até a execução terminar.
 
-A validação final da v0.5.2 continua ativa: o Plutao localiza o arquivo final e só conclui um MP4 depois de validar H.264/AAC ou HEVC/AAC conforme a resolução.
+A v0.5.5 mantém as melhorias anteriores: qualidades reais por vídeo, canais do YouTube separados em Vídeos/Shorts/Lives, metadados complementares do Instagram e o analisador alternativo de perfis do TikTok quando o yt-dlp falha ao obter o `secUid`.
 
-
-- prévia automática de links individuais com título, criador, duração, data de publicação, visualizações e curtidas quando a plataforma fornece;
-- contas/canais/perfis continuam sendo analisados e selecionados dentro da própria janela, com categorias de YouTube e seleção pela linha inteira;
-- destinos ficam resumidos na tela principal e são lembrados entre execuções;
-- configurações técnicas e diagnóstico ficam recolhidos;
-- na primeira utilização, se ainda não houver pasta de destino, o Plutao pergunta onde salvar ao clicar em **BAIXAR**.
+- prévia automática para links individuais;
+- análise automática para perfis/canais/páginas;
+- duração, visualizações, curtidas, data e resolução quando disponíveis;
+- seleção pela linha inteira nas listas;
+- barra de progresso mantida durante todo o fluxo;
+- destinos lembrados entre execuções.
 
 ## Resolução e codec automáticos
 

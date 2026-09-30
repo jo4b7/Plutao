@@ -168,7 +168,7 @@ public sealed class ProfileSelectionPanel : UserControl
 
         Height = targetHeight;
 
-        var rowHeight = compact ? 70 : roomy ? 84 : 78;
+        var rowHeight = compact ? 82 : roomy ? 100 : 92;
         _grid.RowTemplate.Height = rowHeight;
         if (_grid.Rows.Count > 0 && _grid.Rows[0].Height != rowHeight)
         {
@@ -289,7 +289,7 @@ public sealed class ProfileSelectionPanel : UserControl
         _grid.DefaultCellStyle.SelectionForeColor = Color.White;
         _grid.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
         _grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
-        _grid.RowTemplate.Height = 78;
+        _grid.RowTemplate.Height = 92;
 
         _grid.Columns.AddRange(
             new DataGridViewCheckBoxColumn
@@ -313,16 +313,28 @@ public sealed class ProfileSelectionPanel : UserControl
             {
                 HeaderText = "Vídeo",
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
-                MinimumWidth = 280,
+                FillWeight = 54,
+                MinimumWidth = 220,
                 ReadOnly = true,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    WrapMode = DataGridViewTriState.True,
+                    Alignment = DataGridViewContentAlignment.MiddleLeft
+                },
                 SortMode = DataGridViewColumnSortMode.NotSortable
             },
             new DataGridViewTextBoxColumn
             {
                 HeaderText = "Informações",
-                Width = 240,
-                MinimumWidth = 170,
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+                FillWeight = 46,
+                MinimumWidth = 210,
                 ReadOnly = true,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    WrapMode = DataGridViewTriState.True,
+                    Alignment = DataGridViewContentAlignment.MiddleLeft
+                },
                 SortMode = DataGridViewColumnSortMode.NotSortable
             });
     }
@@ -937,20 +949,29 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private static string CompactDetails(CollectionMediaItem item)
     {
-        var details = new List<string>();
-        if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
-        if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
-        if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add($"Duração {item.Duration}");
-        if (!string.IsNullOrWhiteSpace(item.Details)) details.Add(CompactText(item.Details, 120));
-        return string.Join("  •  ", details);
+        // Duração vem primeiro para nunca desaparecer quando a janela/painel
+        // de diagnóstico deixa a lista mais estreita.
+        var primary = new List<string>();
+        if (!string.IsNullOrWhiteSpace(item.Duration)) primary.Add($"Duração {item.Duration}");
+        if (!string.IsNullOrWhiteSpace(item.Date)) primary.Add(item.Date);
+        if (!string.IsNullOrWhiteSpace(item.Category)) primary.Add(item.Category);
+
+        var firstLine = string.Join("  •  ", primary);
+        var metrics = string.IsNullOrWhiteSpace(item.Details)
+            ? string.Empty
+            : CompactText(item.Details, 150);
+
+        if (string.IsNullOrWhiteSpace(firstLine)) return metrics;
+        if (string.IsNullOrWhiteSpace(metrics)) return firstLine;
+        return firstLine + Environment.NewLine + metrics;
     }
 
     private static string FullDetails(CollectionMediaItem item)
     {
         var details = new List<string>();
-        if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
-        if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
         if (!string.IsNullOrWhiteSpace(item.Duration)) details.Add($"Duração {item.Duration}");
+        if (!string.IsNullOrWhiteSpace(item.Date)) details.Add(item.Date);
+        if (!string.IsNullOrWhiteSpace(item.Category)) details.Add(item.Category);
         if (!string.IsNullOrWhiteSpace(item.Details)) details.Add(item.Details);
         return string.Join(Environment.NewLine, details);
     }
