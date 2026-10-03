@@ -32,7 +32,7 @@ public sealed class ToolManager
         Directory.CreateDirectory(TemporaryDirectory);
         MigrateLegacyTools();
 
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.5.0"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.5.6"));
 
         // O HttpClient usa 100 s por padrão. O pacote do FFmpeg pode levar mais
         // que isso em conexões lentas e acabava sendo mostrado como "cancelado".
@@ -41,16 +41,10 @@ public sealed class ToolManager
     }
 
     public static string ResolveDefaultTempDirectory()
-    {
-        const string preferredRoot = @"C:\PROJETOS\Plutao-";
-        if (Directory.Exists(preferredRoot))
-            return Path.Combine(preferredRoot, "Teporarios");
-
-        return Path.Combine(
+        => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Plutao",
             "Temporarios");
-    }
 
 
     public async Task EnsureDownloadDependenciesAsync(
@@ -89,8 +83,7 @@ public sealed class ToolManager
         await DownloadYtDlpAsync(log, progress, ct);
         await DownloadFfmpegAsync(log, progress, ct);
         await DownloadDenoAsync(log, progress, ct);
-        if (File.Exists(GalleryDlPath))
-            await DownloadGalleryDlAsync(log, progress, ct);
+        await DownloadGalleryDlAsync(log, progress, ct);
     }
 
     public async Task EnsureGalleryDlAsync(
@@ -98,7 +91,7 @@ public sealed class ToolManager
         IProgress<DownloadProgressInfo>? progress = null,
         CancellationToken ct = default)
     {
-        if (File.Exists(GalleryDlPath)) return;
+        if (IsUsableExecutable(GalleryDlPath)) return;
         await DownloadGalleryDlAsync(log, progress, ct);
     }
 
@@ -121,7 +114,7 @@ public sealed class ToolManager
         IProgress<DownloadProgressInfo>? progress = null,
         CancellationToken ct = default)
     {
-        if (File.Exists(YtDlpPath)) return;
+        if (IsUsableExecutable(YtDlpPath)) return;
         await DownloadYtDlpAsync(log, progress, ct);
     }
 
@@ -144,7 +137,7 @@ public sealed class ToolManager
         IProgress<DownloadProgressInfo>? progress = null,
         CancellationToken ct = default)
     {
-        if (File.Exists(FfmpegPath) && File.Exists(FfprobePath)) return;
+        if (IsUsableExecutable(FfmpegPath) && IsUsableExecutable(FfprobePath)) return;
         await DownloadFfmpegAsync(log, progress, ct);
     }
 
@@ -175,8 +168,45 @@ public sealed class ToolManager
             if (ffmpeg is null || ffprobe is null)
                 throw new InvalidOperationException("FFmpeg não encontrado no pacote baixado.");
 
-            File.Copy(ffmpeg, FfmpegPath, true);
-            File.Copy(ffprobe, FfprobePath, true);
+            var ffmpegStaged = FfmpegPath + ".new";
+            var ffprobeStaged = FfprobePath + ".new";
+            var ffmpegBackup = FfmpegPath + ".bak";
+            var ffprobeBackup = FfprobePath + ".bak";
+
+            File.Copy(ffmpeg, ffmpegStaged, true);
+            File.Copy(ffprobe, ffprobeStaged, true);
+            if (!IsUsableExecutable(ffmpegStaged) || !IsUsableExecutable(ffprobeStaged))
+                throw new InvalidOperationException("O pacote baixado contém executáveis FFmpeg inválidos.");
+
+            TryDeleteFile(ffmpegBackup);
+            TryDeleteFile(ffprobeBackup);
+
+            try
+            {
+                if (File.Exists(FfmpegPath))
+                    File.Copy(FfmpegPath, ffmpegBackup, true);
+                if (File.Exists(FfprobePath))
+                    File.Copy(FfprobePath, ffprobeBackup, true);
+
+                File.Move(ffmpegStaged, FfmpegPath, true);
+                File.Move(ffprobeStaged, FfprobePath, true);
+            }
+            catch
+            {
+                if (File.Exists(ffmpegBackup))
+                    File.Copy(ffmpegBackup, FfmpegPath, true);
+                if (File.Exists(ffprobeBackup))
+                    File.Copy(ffprobeBackup, FfprobePath, true);
+                throw;
+            }
+            finally
+            {
+                TryDeleteFile(ffmpegStaged);
+                TryDeleteFile(ffprobeStaged);
+                TryDeleteFile(ffmpegBackup);
+                TryDeleteFile(ffprobeBackup);
+            }
+
             progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "FFmpeg pronto"));
             log?.Report("[Componentes] FFmpeg pronto.");
         }
@@ -192,7 +222,7 @@ public sealed class ToolManager
         IProgress<DownloadProgressInfo>? progress = null,
         CancellationToken ct = default)
     {
-        if (File.Exists(DenoPath)) return;
+        if (IsUsableExecutable(DenoPath)) return;
         await DownloadDenoAsync(log, progress, ct);
     }
 
@@ -253,6 +283,26 @@ public sealed class ToolManager
         catch
         {
             // Migração é apenas uma otimização; falhas não impedem o aplicativo de abrir.
+        }
+    }
+
+    private static bool IsUsableExecutable(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return false;
+
+            var info = new FileInfo(path);
+            if (info.Length < 64 * 1024)
+                return false;
+
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return stream.ReadByte() == 'M' && stream.ReadByte() == 'Z';
+        }
+        catch
+        {
+            return false;
         }
     }
 

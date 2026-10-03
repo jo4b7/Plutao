@@ -113,6 +113,13 @@ internal static class AppCache
                     return $"https://www.youtube.com/watch?v={id}";
             }
 
+            if (path.Equals("/playlist", StringComparison.OrdinalIgnoreCase))
+            {
+                var playlistQuery = ParseQuery(uri.Query);
+                if (playlistQuery.TryGetValue("list", out var listId) && !string.IsNullOrWhiteSpace(listId))
+                    return $"https://www.youtube.com/playlist?list={Uri.EscapeDataString(listId)}";
+            }
+
             foreach (var prefix in new[] { "/shorts/", "/live/" })
             {
                 if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -236,13 +243,13 @@ internal static class AppCache
     }
 
     private static string BuildCollectionKey(string url, string browserCookies, int limit)
-        => $"collection-v054-instagram-meta1-tiktok-gallery1-youtube-tabs1|{NormalizeUrl(url)}|{browserCookies.Trim().ToLowerInvariant()}|{limit}";
+        => $"collection-v056-instagram-categories2-tiktok-gallery1-youtube-tabs2|{NormalizeUrl(url)}|{browserCookies.Trim().ToLowerInvariant()}|{limit}";
 
     public static string BuildDownloadKey(string url, DownloadOptions options)
     {
         var raw = string.Join("|", new[]
         {
-            "download-cache-v052-finalpath1",
+            "download-cache-v056-finalpath2",
             NormalizeUrl(url),
             options.Mode.ToString(),
             options.Quality,

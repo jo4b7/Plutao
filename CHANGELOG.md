@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.6
+
+- Corrige colisão de cache entre playlists diferentes do YouTube.
+- O modo **Substituir** deixa de reaproveitar silenciosamente um arquivo do cache.
+- Arquivos reutilizados passam por verificação básica com `ffprobe`; cache inválido é descartado.
+- **ABRIR ARQUIVO** só é liberado depois da validação final do arquivo.
+- Conversões MP4 validam o temporário antes de substituir o original.
+- Vídeos verticais como 1080x1920 passam a ser tratados como 1080p; 1440p/4K continuam usando HEVC.
+- Coleções MP4 validam os caminhos finais capturados, em vez de validar apenas o último arquivo.
+- Erros internos de coleções deixam de ser mascarados pelo `--ignore-errors`.
+- O limite de canal do YouTube passa a valer para o total de Vídeos + Shorts + Lives.
+- Instagram ganha categorias **Reels** e **Posts**.
+- Comentários são exibidos quando a plataforma fornece a contagem.
+- Corrige `@` duplicado e melhora a escolha do identificador de canais.
+- Miniaturas do YouTube ganham fallback por ID; caches de imagem corrompidos são descartados.
+- Cache de miniaturas em RAM passa a ter limite.
+- Corrige o progresso em filas que misturam vários links e coleções.
+- Durante uma tarefa, opções que alterariam a execução atual ficam bloqueadas.
+- Análise cancelada ou vazia passa a mostrar estado correto e **TENTAR NOVAMENTE**.
+- Resultados ocultos podem ser mostrados novamente.
+- Gaveta de configurações, prévia e colunas da lista recebem ajustes de geometria.
+- **Atualizar componentes** também instala/atualiza `gallery-dl`.
+- Executáveis de componentes truncados passam a ser detectados.
+- Remove o caminho temporário especial de desenvolvimento e usa `%LOCALAPPDATA%\Plutao\Temporarios`.
+- User-Agent interno e versão do aplicativo atualizados para 0.5.6.
+
 ## 0.5.5
 
 - Links de perfil/canal compatíveis passam a ser analisados automaticamente após o usuário colar o link; não é mais obrigatório clicar em **ANALISAR PERFIL / CANAL**.

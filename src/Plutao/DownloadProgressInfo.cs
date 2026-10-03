@@ -15,12 +15,15 @@ public sealed record DownloadProgressInfo(
     {
         get
         {
-            if (CollectionIndex > 0 && CollectionCount > 0)
-                return Math.Clamp(((CollectionIndex - 1) + (Percent / 100.0)) / CollectionCount * 100.0, 0, 100);
+            var innerFraction = Math.Clamp(Percent / 100.0, 0, 1);
 
-            return ItemCount <= 0
-                ? Percent
-                : Math.Clamp(((ItemIndex - 1) + (Percent / 100.0)) / ItemCount * 100.0, 0, 100);
+            if (CollectionIndex > 0 && CollectionCount > 0)
+                innerFraction = Math.Clamp(((CollectionIndex - 1) + innerFraction) / CollectionCount, 0, 1);
+
+            if (ItemIndex > 0 && ItemCount > 0)
+                return Math.Clamp(((ItemIndex - 1) + innerFraction) / ItemCount * 100.0, 0, 100);
+
+            return Math.Clamp(innerFraction * 100.0, 0, 100);
         }
     }
 }
