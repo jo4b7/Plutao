@@ -28,7 +28,6 @@ public sealed class MainForm : Form
     private readonly CheckBox chkThumb = new() { Text = "Salvar miniatura", AutoSize = true };
     private readonly CheckBox chkJson = new() { Text = "Salvar info JSON", AutoSize = true };
     private readonly CheckBox chkArchive = new() { Text = "Evitar repetir o mesmo link (histórico)", Checked = false, AutoSize = true };
-    private readonly CheckBox chkCompatibleMp4 = new() { Text = "Compatibilidade automática (H.264 até 1080p • HEVC acima)", Checked = true, AutoSize = true };
 
     private readonly Button btnDownload = new() { Text = "BAIXAR", Height = 44 };
     private readonly Button btnStop = new() { Text = "PARAR", Height = 44, Enabled = false };
@@ -38,10 +37,11 @@ public sealed class MainForm : Form
     private readonly Button btnBrowseAudio = new() { Text = "Procurar" };
     private readonly Button btnOpenAudio = new() { Text = "Abrir" };
     private readonly Button btnBrowseTemp = new() { Text = "Procurar" };
-    private readonly Button btnUpdate = new() { Text = "Atualizar componentes" };
+    private readonly Button btnUpdate = new() { Text = "Atualizar componentes", AutoSize = true, MinimumSize = new Size(180, 34) };
     private readonly Button btnClearLog = new() { Text = "Limpar log" };
     private readonly Button btnAdvanced = new() { Text = "Configurações", AutoSize = true };
     private readonly Button btnToggleLog = new() { Text = "Diagnóstico", AutoSize = true };
+    private readonly Button btnToggleResults = new() { Text = "Mostrar resultados", AutoSize = true, Visible = false };
     private readonly Button btnCloseSettings = new() { Text = "FECHAR", AutoSize = true };
     private readonly GroupBox grpAdvanced = new();
     private readonly GroupBox grpLog = new();
@@ -50,7 +50,7 @@ public sealed class MainForm : Form
     private readonly Panel settingsDrawer = new();
     private readonly Label lblSettingsBusyHint = new()
     {
-        Text = "Execução em andamento • alterações feitas aqui serão usadas na próxima tarefa.",
+        Text = "Execução em andamento • a tarefa atual mantém as opções do início; alterações valem para a próxima.",
         AutoSize = true,
         ForeColor = Color.FromArgb(255, 194, 92),
         Visible = false
@@ -77,7 +77,7 @@ public sealed class MainForm : Form
     private readonly Label lblPreviewTitle = new() { Text = "Cole um link para começar", AutoSize = true, AutoEllipsis = true };
     private readonly Label lblPreviewMeta = new() { Text = "Vídeo, áudio, perfil, canal ou playlist", AutoSize = true };
     private readonly Label lblPreviewDetails = new() { Text = "", AutoSize = true };
-    private readonly Label lblDestination = new() { Text = "Destino não definido", AutoSize = true, AutoEllipsis = true };
+    private readonly Label lblDestination = new() { Text = "Destino não definido", AutoSize = false, AutoEllipsis = true };
     private readonly Button btnChangeDestination = new() { Text = "Alterar", AutoSize = true };
     private readonly Button btnOpenDownloads = new() { Text = "Abrir downloads", AutoSize = true };
     private readonly Label lblQualityCaption = new() { Text = "Qualidade", AutoSize = true };
@@ -90,6 +90,7 @@ public sealed class MainForm : Form
     private string? _analyzedCollectionUrl;
     private string _selectedPlaylistItems = string.Empty;
     private readonly List<string> _selectedCollectionUrls = new();
+    private string? _activeOutputDirectory;
     private bool _advancedVisible;
     private bool _logVisible;
     private bool _busy;
@@ -179,7 +180,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.5",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.6",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -198,6 +199,7 @@ public sealed class MainForm : Form
             Margin = new Padding(0, 8, 0, 0)
         };
         headerActions.Controls.Add(btnOpenDownloads);
+        headerActions.Controls.Add(btnToggleResults);
         headerActions.Controls.Add(btnToggleLog);
         headerActions.Controls.Add(btnAdvanced);
         header.Controls.Add(headerActions, 1, 0);
@@ -689,8 +691,8 @@ public sealed class MainForm : Form
         if (!IsHandleCreated)
             return;
 
-        var width = Math.Clamp((int)(ClientSize.Width * 0.38), 390, 520);
-        width = Math.Min(width, Math.Max(320, ClientSize.Width - 40));
+        var width = Math.Clamp((int)(ClientSize.Width * 0.46), 460, 660);
+        width = Math.Min(width, Math.Max(360, ClientSize.Width - 32));
         settingsDrawer.Width = width;
         settingsDrawer.Height = ClientSize.Height;
         settingsDrawer.Left = Math.Max(0, ClientSize.Width - width);
@@ -708,7 +710,7 @@ public sealed class MainForm : Form
         var roomy = clientHeight >= 900 && clientWidth >= 1600;
 
         SetNamedHeight("linkCard", compact ? 130 : roomy ? 150 : 142);
-        SetNamedHeight("previewCard", compact ? 112 : roomy ? 126 : 120);
+        SetNamedHeight("previewCard", compact ? 124 : roomy ? 132 : 126);
         SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
         profileSelection.ApplyResponsiveHeight(compact, roomy);
         profileWorkspace.Height = profileSelection.Height;
@@ -806,7 +808,6 @@ public sealed class MainForm : Form
         chkOrganize.Checked = false;
         chkPlaylist.Checked = true;
         chkArchive.Checked = false;
-        chkCompatibleMp4.Checked = true; // regra automática interna para MP4
         lblCollectionInfo.Text = "Não analisado";
         lblCollectionInfo.ForeColor = TextMuted;
         progress.Value = 0;
@@ -865,7 +866,7 @@ public sealed class MainForm : Form
                 _previewTask = AnalyzeCurrentPreviewAsync();
                 try { await _previewTask; } catch { }
             }
-            else if (IsLikelyCollectionUrl(urls[0]))
+            else if (chkPlaylist.Checked && IsLikelyCollectionUrl(urls[0]))
             {
                 try { await AnalyzeCollectionAsync(automatic: true); } catch { }
             }
@@ -876,6 +877,17 @@ public sealed class MainForm : Form
         profileSelection.HideRequested += (_, _) =>
         {
             profileSelection.Visible = false;
+            btnToggleResults.Visible = profileSelection.HasData;
+            btnToggleResults.Text = "Mostrar resultados";
+            UpdateWorkspaceLayout();
+        };
+        btnToggleResults.Click += (_, _) =>
+        {
+            if (!profileSelection.HasData)
+                return;
+
+            profileSelection.Visible = !profileSelection.Visible;
+            btnToggleResults.Text = profileSelection.Visible ? "Ocultar resultados" : "Mostrar resultados";
             UpdateWorkspaceLayout();
         };
 
@@ -908,12 +920,17 @@ public sealed class MainForm : Form
         };
         btnOpenDownloads.Click += (_, _) =>
         {
-            var path = rbVideo.Checked ? txtVideoOutput.Text : txtAudioOutput.Text;
+            var path = _busy && !string.IsNullOrWhiteSpace(_activeOutputDirectory)
+                ? _activeOutputDirectory
+                : rbVideo.Checked ? txtVideoOutput.Text : txtAudioOutput.Text;
+
             if (string.IsNullOrWhiteSpace(path))
             {
-                btnChangeDestination.PerformClick();
+                if (!_busy)
+                    btnChangeDestination.PerformClick();
                 return;
             }
+
             OpenFolder(path);
         };
 
@@ -971,7 +988,9 @@ public sealed class MainForm : Form
         if (_busy || urls.Count != 1)
             return;
 
-        if (YtDlpRunner.IsLikelySingleMediaUrl(urls[0]) || IsLikelyCollectionUrl(urls[0]))
+        if (YtDlpRunner.IsLikelySingleMediaUrl(urls[0]))
+            _previewTimer.Start();
+        else if (chkPlaylist.Checked && IsLikelyCollectionUrl(urls[0]))
             _previewTimer.Start();
     }
 
@@ -1361,6 +1380,8 @@ public sealed class MainForm : Form
         _selectedPlaylistItems = string.Empty;
         _selectedCollectionUrls.Clear();
         profileSelection.ClearData();
+        btnToggleResults.Visible = false;
+        btnToggleResults.Text = "Mostrar resultados";
         UpdateWorkspaceLayout();
         if (!IsDisposed)
             lblCollectionInfo.Text = "Não analisado";
@@ -1413,7 +1434,14 @@ public sealed class MainForm : Form
             return;
 
         if (!chkPlaylist.Checked)
+        {
+            if (automatic)
+                return;
             chkPlaylist.Checked = true;
+        }
+
+        var analysisCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum";
+        var analysisLimit = SelectedCollectionLimit();
 
         await StopPreviewBeforeRunnerUseAsync();
         _tools.TemporaryDirectory = txtTemp.Text.Trim();
@@ -1431,8 +1459,8 @@ public sealed class MainForm : Form
         {
             var items = await _runner.AnalyzeCollectionAsync(
                 targetUrl,
-                cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
-                SelectedCollectionLimit(),
+                analysisCookies,
+                analysisLimit,
                 LogProgress(),
                 new Progress<DownloadProgressInfo>(SetProgressUi),
                 _cts.Token);
@@ -1440,6 +1468,9 @@ public sealed class MainForm : Form
             if (items.Count == 0)
             {
                 lblCollectionInfo.Text = "0 vídeos encontrados";
+                lblStatus.Text = "Nenhum vídeo encontrado";
+                lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
+                lblCurrent.Text = "A plataforma não devolveu mídias para esse link.";
                 btnAnalyzeCollection.Text = "TENTAR NOVAMENTE";
                 btnAnalyzeCollection.Visible = true;
                 if (!automatic)
@@ -1447,13 +1478,23 @@ public sealed class MainForm : Form
                 return;
             }
 
-            // Se o link mudou durante a análise, ignora o resultado antigo.
-            var currentUrl = CurrentUrls().Count == 1 ? CurrentUrls()[0] : string.Empty;
-            if (!string.Equals(AppCache.NormalizeUrl(targetUrl), AppCache.NormalizeUrl(currentUrl), StringComparison.OrdinalIgnoreCase))
+            // Se link, cookies, limite ou modo mudaram durante a análise,
+            // ignora o resultado antigo. O finally agenda nova análise quando aplicável.
+            var currentUrls = CurrentUrls();
+            var currentUrl = currentUrls.Count == 1 ? currentUrls[0] : string.Empty;
+            var currentCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum";
+            var currentLimit = SelectedCollectionLimit();
+            if (!chkPlaylist.Checked ||
+                !string.Equals(AppCache.NormalizeUrl(targetUrl), AppCache.NormalizeUrl(currentUrl), StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(analysisCookies, currentCookies, StringComparison.OrdinalIgnoreCase) ||
+                analysisLimit != currentLimit)
                 return;
 
             _analyzedCollectionUrl = targetUrl;
             profileSelection.LoadData(items, _runner.LastAnalyzedProfile);
+            profileSelection.Visible = true;
+            btnToggleResults.Visible = true;
+            btnToggleResults.Text = "Ocultar resultados";
             UpdateWorkspaceLayout();
             ApplyResponsiveSpacing();
             ApplyProfileSelection();
@@ -1464,13 +1505,17 @@ public sealed class MainForm : Form
 
             lblStatus.Text = "Análise concluída";
             lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
-            lblCurrent.Text = $"Encontrados {items.Count} vídeo(s).";
+            lblCurrent.Text = $"Encontrados {items.Count} vídeos.";
         }
         catch (OperationCanceledException)
         {
             lblStatus.Text = "Cancelado";
             lblStatus.ForeColor = Color.FromArgb(255, 184, 77);
             lblCurrent.Text = "Análise cancelada.";
+            lblCollectionInfo.Text = "Análise cancelada";
+            btnAnalyzeCollection.Text = "TENTAR NOVAMENTE";
+            var current = CurrentUrls();
+            btnAnalyzeCollection.Visible = current.Count == 1 && IsLikelyCollectionUrl(current[0]);
             AppendLog("[Análise] Cancelada.");
         }
         catch (Exception ex)
@@ -1490,6 +1535,7 @@ public sealed class MainForm : Form
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
+            RestartPreviewAnalysis();
         }
     }
 
@@ -1554,6 +1600,7 @@ public sealed class MainForm : Form
             ExistingFileBehavior = SelectedExistingFileBehavior()
         };
 
+        _activeOutputDirectory = options.OutputDirectory;
         await StopPreviewBeforeRunnerUseAsync();
         _tools.TemporaryDirectory = options.TemporaryDirectory;
         _cts = new CancellationTokenSource();
@@ -1563,14 +1610,14 @@ public sealed class MainForm : Form
         if (downloadUrls.Count == 1 && YtDlpRunner.IsLikelySingleMediaUrl(downloadUrls[0]))
             AppendLog("Detecção automática: mídia individual; o modo de página/playlist será ignorado para acelerar o início.");
         if (usingSelectedUrls)
-            AppendLog($"Seleção individual: {downloadUrls.Count} mídia(s) da conta serão baixadas por URL individual.");
+            AppendLog($"Seleção individual: {downloadUrls.Count} mídias da conta serão baixadas por URL individual.");
         AppendLog($"Destino: {options.OutputDirectory}");
         AppendLog($"Organização por canal/criador: {(options.OrganizeByCreator ? "ativada" : "desativada")}");
         AppendLog(options.AllowPlaylists
             ? $"Página/conta/canal/perfil completo: ativado (limite: {(options.CollectionLimit > 0 ? options.CollectionLimit.ToString() : "todos")})"
             : "Página/conta/canal/perfil completo: desativado");
         if (!string.IsNullOrWhiteSpace(options.SelectedPlaylistItems))
-            AppendLog($"Seleção individual ativa: {options.SelectedPlaylistItems.Split(',').Length} item(ns).");
+            AppendLog($"Seleção individual ativa: {options.SelectedPlaylistItems.Split(',').Length} itens.");
         AppendLog($"Arquivo existente: {ExistingBehaviorLabel(options.ExistingFileBehavior)}");
         if (options.UseArchive)
             AppendLog("Histórico anti-repetição: ativado (o mesmo ID pode ser ignorado mesmo ao mudar qualidade/formato).");
@@ -1626,6 +1673,7 @@ public sealed class MainForm : Form
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
+            _activeOutputDirectory = null;
         }
     }
 

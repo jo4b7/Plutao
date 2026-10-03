@@ -13,6 +13,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private static readonly string RenderedCacheDirectory = AppCache.RenderedThumbnailDirectory;
     private static readonly ConcurrentDictionary<string, byte[]> MemoryCache = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, byte[]> RenderedMemoryCache = new(StringComparer.Ordinal);
+    private const int MaxMemoryCacheEntries = 512;
     private static readonly HttpClient Http = CreateHttpClient();
     private static int _cacheWrites;
 
@@ -295,8 +296,8 @@ public sealed class ProfileSelectionPanel : UserControl
             new DataGridViewCheckBoxColumn
             {
                 HeaderText = "Selecionado",
-                Width = 92,
-                MinimumWidth = 82,
+                Width = 78,
+                MinimumWidth = 68,
                 ReadOnly = true,
                 FlatStyle = FlatStyle.Flat,
                 SortMode = DataGridViewColumnSortMode.NotSortable
@@ -304,8 +305,8 @@ public sealed class ProfileSelectionPanel : UserControl
             new DataGridViewImageColumn
             {
                 HeaderText = "Miniatura",
-                Width = 118,
-                MinimumWidth = 96,
+                Width = 100,
+                MinimumWidth = 82,
                 ImageLayout = DataGridViewImageCellLayout.Zoom,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             },
@@ -314,7 +315,7 @@ public sealed class ProfileSelectionPanel : UserControl
                 HeaderText = "Vídeo",
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 54,
-                MinimumWidth = 220,
+                MinimumWidth = 180,
                 ReadOnly = true,
                 DefaultCellStyle = new DataGridViewCellStyle
                 {
@@ -328,7 +329,7 @@ public sealed class ProfileSelectionPanel : UserControl
                 HeaderText = "Informações",
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
                 FillWeight = 46,
-                MinimumWidth = 210,
+                MinimumWidth = 160,
                 ReadOnly = true,
                 DefaultCellStyle = new DataGridViewCellStyle
                 {
@@ -352,17 +353,18 @@ public sealed class ProfileSelectionPanel : UserControl
             return;
         }
 
+        var cleanUsername = (_profile.Username ?? string.Empty).Trim().TrimStart('@');
         _profileName.Text = string.IsNullOrWhiteSpace(_profile.DisplayName)
-            ? (!string.IsNullOrWhiteSpace(_profile.Username) ? _profile.Username : _profile.Platform)
+            ? (!string.IsNullOrWhiteSpace(cleanUsername) ? cleanUsername : _profile.Platform)
             : _profile.DisplayName;
-        _profileHandle.Text = string.IsNullOrWhiteSpace(_profile.Username)
+        _profileHandle.Text = string.IsNullOrWhiteSpace(cleanUsername)
             ? _profile.Platform
-            : $"@{_profile.Username}  •  {_profile.Platform}";
+            : $"@{cleanUsername}  •  {_profile.Platform}";
 
         var stats = new List<string>();
-        if (_profile.Followers.HasValue && _profile.Followers.Value > 0) stats.Add($"{FormatCount(_profile.Followers.Value)} seguidores");
-        if (_profile.Following.HasValue && _profile.Following.Value > 0) stats.Add($"{FormatCount(_profile.Following.Value)} seguindo");
-        if (_profile.Posts.HasValue && _profile.Posts.Value > 0) stats.Add($"{FormatCount(_profile.Posts.Value)} publicações");
+        if (_profile.Followers.HasValue) stats.Add($"{FormatCount(_profile.Followers.Value)} seguidores");
+        if (_profile.Following.HasValue) stats.Add($"{FormatCount(_profile.Following.Value)} seguindo");
+        if (_profile.Posts.HasValue) stats.Add($"{FormatCount(_profile.Posts.Value)} publicações");
         stats.Add($"{_profile.FoundVideos:N0} vídeos encontrados");
         _profileStats.Text = string.Join("   •   ", stats);
 
@@ -517,6 +519,8 @@ public sealed class ProfileSelectionPanel : UserControl
             "Vídeos" => 0,
             "Shorts" => 1,
             "Lives" => 2,
+            "Reels" => 3,
+            "Posts" => 4,
             _ => 10
         };
 
@@ -644,7 +648,16 @@ public sealed class ProfileSelectionPanel : UserControl
         try
         {
             var item = _items[rowIndex];
-            if (string.IsNullOrWhiteSpace(item.ThumbnailUrl))
+            var thumbnailUrl = item.ThumbnailUrl;
+            if (string.IsNullOrWhiteSpace(thumbnailUrl) &&
+                !string.IsNullOrWhiteSpace(item.Id) &&
+                (item.Url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+                 item.Url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase)))
+            {
+                thumbnailUrl = $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg";
+            }
+
+            if (string.IsNullOrWhiteSpace(thumbnailUrl))
             {
                 _thumbnailLoaded.TryAdd(rowIndex, 0);
                 return;
@@ -653,8 +666,12 @@ public sealed class ProfileSelectionPanel : UserControl
             await _thumbnailGate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var image = await DownloadAndResizeAsync(item.ThumbnailUrl, 112, 70, ct).ConfigureAwait(false);
-                if (image is null || ct.IsCancellationRequested) return;
+                var image = await DownloadAndResizeAsync(thumbnailUrl, 112, 70, ct).ConfigureAwait(false);
+                if (image is null || ct.IsCancellationRequested)
+                {
+                    _thumbnailLoaded.TryAdd(rowIndex, 0);
+                    return;
+                }
 
                 if (IsDisposed)
                 {
@@ -730,8 +747,15 @@ public sealed class ProfileSelectionPanel : UserControl
                 {
                     try { File.SetLastAccessTimeUtc(renderedPath, DateTime.UtcNow); } catch { }
                     var cached = await File.ReadAllBytesAsync(renderedPath, ct).ConfigureAwait(false);
-                    RenderedMemoryCache.TryAdd(renderedKey, cached);
-                    return BitmapFromBytes(cached);
+                    var cachedImage = BitmapFromBytes(cached);
+                    if (cachedImage is not null)
+                    {
+                        AddMemoryEntry(RenderedMemoryCache, renderedKey, cached);
+                        return cachedImage;
+                    }
+
+                    try { File.Delete(renderedPath); } catch { }
+                    RenderedMemoryCache.TryRemove(renderedKey, out _);
                 }
             }
             catch { }
@@ -763,7 +787,7 @@ public sealed class ProfileSelectionPanel : UserControl
                 using var output = new MemoryStream();
                 bitmap.Save(output, ImageFormat.Png);
                 var renderedBytes = output.ToArray();
-                RenderedMemoryCache.TryAdd(renderedKey, renderedBytes);
+                AddMemoryEntry(RenderedMemoryCache, renderedKey, renderedBytes);
                 Directory.CreateDirectory(RenderedCacheDirectory);
                 await File.WriteAllBytesAsync(renderedPath, renderedBytes, ct).ConfigureAwait(false);
                 ScheduleCacheTrim();
@@ -795,7 +819,11 @@ public sealed class ProfileSelectionPanel : UserControl
     private static async Task<byte[]?> GetImageBytesAsync(string url, CancellationToken ct)
     {
         if (MemoryCache.TryGetValue(url, out var memory))
-            return memory;
+        {
+            if (IsValidImageBytes(memory))
+                return memory;
+            MemoryCache.TryRemove(url, out _);
+        }
 
         var cachePath = CachePath(url);
         try
@@ -804,8 +832,13 @@ public sealed class ProfileSelectionPanel : UserControl
             {
                 try { File.SetLastAccessTimeUtc(cachePath, DateTime.UtcNow); } catch { }
                 var cached = await File.ReadAllBytesAsync(cachePath, ct).ConfigureAwait(false);
-                MemoryCache.TryAdd(url, cached);
-                return cached;
+                if (IsValidImageBytes(cached))
+                {
+                    AddMemoryEntry(MemoryCache, url, cached);
+                    return cached;
+                }
+
+                try { File.Delete(cachePath); } catch { }
             }
         }
         catch { }
@@ -824,9 +857,9 @@ public sealed class ProfileSelectionPanel : UserControl
             if (!response.IsSuccessStatusCode) return null;
 
             var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            if (bytes.Length == 0) return null;
+            if (bytes.Length == 0 || !IsValidImageBytes(bytes)) return null;
 
-            MemoryCache.TryAdd(url, bytes);
+            AddMemoryEntry(MemoryCache, url, bytes);
             try
             {
                 Directory.CreateDirectory(CacheDirectory);
@@ -840,6 +873,31 @@ public sealed class ProfileSelectionPanel : UserControl
         {
             return null;
         }
+    }
+
+    private static bool IsValidImageBytes(byte[] bytes)
+    {
+        try
+        {
+            using var ms = new MemoryStream(bytes, writable: false);
+            using var image = Image.FromStream(ms, useEmbeddedColorManagement: false, validateImageData: true);
+            return image.Width > 0 && image.Height > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void AddMemoryEntry(ConcurrentDictionary<string, byte[]> cache, string key, byte[] bytes)
+    {
+        cache[key] = bytes;
+        if (cache.Count <= MaxMemoryCacheEntries)
+            return;
+
+        var removeCount = Math.Max(1, cache.Count - (MaxMemoryCacheEntries * 3 / 4));
+        foreach (var oldKey in cache.Keys.Take(removeCount))
+            cache.TryRemove(oldKey, out _);
     }
 
     private static void ScheduleCacheTrim()

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -21,6 +22,8 @@ public sealed class YtDlpRunner
     };
 
     private string? _currentCompletedFilePath;
+    private readonly ConcurrentQueue<string> _completedFilePaths = new();
+    private volatile bool _currentRunHadErrors;
     public string? LastCompletedFilePath { get; private set; }
     public ProfileInfo? LastAnalyzedProfile { get; private set; }
 
@@ -227,8 +230,8 @@ public sealed class YtDlpRunner
                 out var cachedProfile))
         {
             LastAnalyzedProfile = cachedProfile;
-            log.Report($"[Cache] Perfil reaproveitado: {cachedItems.Count} item(ns), sem nova análise da plataforma.");
-            progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{cachedItems.Count} mídia(s) em cache"));
+            log.Report($"[Cache] Perfil reaproveitado: {cachedItems.Count} itens, sem nova análise da plataforma.");
+            progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{cachedItems.Count} mídias em cache"));
             return cachedItems;
         }
 
@@ -417,8 +420,8 @@ public sealed class YtDlpRunner
             throw new InvalidOperationException("A plataforma respondeu, mas o Plutao não conseguiu interpretar a lista de vídeos.", ex);
         }
 
-        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{items.Count} mídia(s) encontrada(s)"));
-        log.Report($"[Análise] Encontrados {items.Count} item(ns).");
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{items.Count} mídias encontrada(s)"));
+        log.Report($"[Análise] Encontrados {items.Count} itens.");
         AppCache.StoreCollection(url, browserCookies, limit, items, LastAnalyzedProfile);
         return items;
     }
@@ -525,11 +528,15 @@ public sealed class YtDlpRunner
             progress.Report(new DownloadProgressInfo(0, 0, stagePercent, "", "", "", $"Lendo {tab.Category}"));
             log.Report($"[Análise/YouTube] {tab.Category}: {tabUrl}");
 
+            var remaining = limit > 0 ? Math.Max(0, limit - combined.Count) : 0;
+            if (limit > 0 && remaining == 0)
+                break;
+
             var result = await AnalyzeYouTubeChannelTabAsync(
                 tabUrl,
                 tab.Category,
                 browserCookies,
-                limit,
+                remaining,
                 log,
                 ct);
 
@@ -537,7 +544,11 @@ public sealed class YtDlpRunner
                 profile = result.Profile;
 
             combined.AddRange(result.Items);
-            log.Report($"[Análise/YouTube] {tab.Category}: {result.Items.Count} item(ns).");
+            if (limit > 0 && combined.Count > limit)
+                combined.RemoveRange(limit, combined.Count - limit);
+            log.Report($"[Análise/YouTube] {tab.Category}: {result.Items.Count} itens.");
+            if (limit > 0 && combined.Count >= limit)
+                break;
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -558,17 +569,23 @@ public sealed class YtDlpRunner
             .Select((item, index) => item with { Index = index + 1 })
             .ToArray();
 
+        var enrichedItems = await EnrichYouTubeMetadataAsync(
+            finalItems,
+            browserCookies,
+            log,
+            progress,
+            ct);
         LastAnalyzedProfile = profile is null
             ? null
             : profile with
             {
                 ExternalUrl = channelBaseUrl,
-                FoundVideos = finalItems.Length
+                FoundVideos = enrichedItems.Length
             };
 
-        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{finalItems.Length} mídia(s) encontrada(s)"));
-        log.Report($"[Análise/YouTube] Total: {finalItems.Length} mídia(s) após remover duplicados.");
-        return finalItems;
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{enrichedItems.Length} mídias encontradas"));
+        log.Report($"[Análise/YouTube] Total: {enrichedItems.Length} mídias após remover duplicados e completar metadados.");
+        return enrichedItems;
     }
 
     private async Task<(IReadOnlyList<CollectionMediaItem> Items, ProfileInfo? Profile)> AnalyzeYouTubeChannelTabAsync(
@@ -686,6 +703,167 @@ public sealed class YtDlpRunner
         }
     }
 
+    private async Task<CollectionMediaItem[]> EnrichYouTubeMetadataAsync(
+        IReadOnlyList<CollectionMediaItem> items,
+        string browserCookies,
+        IProgress<string> log,
+        IProgress<DownloadProgressInfo> progress,
+        CancellationToken ct)
+    {
+        if (items.Count == 0)
+            return Array.Empty<CollectionMediaItem>();
+
+        var results = items.ToArray();
+        var pending = items
+            .Select((item, index) => (Item: item, Index: index))
+            .Where(x => string.IsNullOrWhiteSpace(x.Item.Duration) ||
+                        string.IsNullOrWhiteSpace(x.Item.ThumbnailUrl))
+            .ToArray();
+
+        if (pending.Length == 0)
+            return results;
+
+        log.Report($"[Análise/YouTube] Completando duração/miniatura de {pending.Length} mídias...");
+        progress.Report(new DownloadProgressInfo(0, 0, 82, "", "", "", "Completando metadados do YouTube"));
+
+        var completed = 0;
+        var maxParallel = string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase) ? 6 : 3;
+        using var gate = new SemaphoreSlim(maxParallel, maxParallel);
+
+        var tasks = pending.Select(async entry =>
+        {
+            await gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                results[entry.Index] = await AnalyzeYouTubeItemMetadataAsync(
+                    entry.Item,
+                    browserCookies,
+                    ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                results[entry.Index] = entry.Item;
+            }
+            finally
+            {
+                gate.Release();
+                var done = Interlocked.Increment(ref completed);
+                var percent = 82 + (int)Math.Round(16d * done / pending.Length);
+                progress.Report(new DownloadProgressInfo(
+                    0,
+                    0,
+                    Math.Clamp(percent, 82, 98),
+                    "",
+                    "",
+                    entry.Item.Title,
+                    $"Metadados do YouTube: {done}/{pending.Length}"));
+            }
+        }).ToArray();
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results;
+    }
+
+    private async Task<CollectionMediaItem> AnalyzeYouTubeItemMetadataAsync(
+        CollectionMediaItem item,
+        string browserCookies,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(item.Url))
+            return item;
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.YtDlpPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var arg in new[]
+                 {
+                     "--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings",
+                     "--cache-dir", _tools.CacheDirectory,
+                     "--js-runtimes", $"deno:{_tools.DenoPath}"
+                 })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        if (!string.Equals(browserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
+        {
+            psi.ArgumentList.Add("--cookies-from-browser");
+            psi.ArgumentList.Add(browserCookies.ToLowerInvariant());
+        }
+
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(item.Url);
+
+        using var process = new Process { StartInfo = psi };
+        process.Start();
+        using var reg = ct.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(true);
+            }
+            catch { }
+        });
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync(ct).ConfigureAwait(false);
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        _ = await stderrTask.ConfigureAwait(false);
+
+        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+            return item;
+
+        try
+        {
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return item;
+
+            var duration = FormatDuration(ReadDouble(root, "duration"));
+            if (string.IsNullOrWhiteSpace(duration))
+                duration = item.Duration;
+
+            var thumbnail = ReadThumbnailUrl(root);
+            if (string.IsNullOrWhiteSpace(thumbnail))
+                thumbnail = item.ThumbnailUrl;
+
+            var date = ReadMediaDate(root);
+            if (string.IsNullOrWhiteSpace(date))
+                date = item.Date;
+
+            var details = FormatMediaDetails(root);
+            if (string.IsNullOrWhiteSpace(details))
+                details = item.Details;
+
+            return item with
+            {
+                Duration = duration,
+                ThumbnailUrl = thumbnail,
+                Date = date,
+                Details = details
+            };
+        }
+        catch (JsonException)
+        {
+            return item;
+        }
+    }
+
     private static string NormalizeYouTubeMediaUrl(string rawUrl, string id)
     {
         rawUrl = (rawUrl ?? string.Empty).Trim();
@@ -749,7 +927,7 @@ public sealed class YtDlpRunner
 
             var remaining = limit > 0 ? Math.Max(1, limit - items.Count) : 0;
             var stdout = await RunGalleryDlAnalysisAsync(target.Url, browserCookies, remaining, log, ct);
-            ExtractInstagramVideoItems(stdout, items, seen, limit);
+            ExtractInstagramVideoItems(stdout, items, seen, limit, target.Label);
         }
 
         if (items.Count == 0)
@@ -758,7 +936,7 @@ public sealed class YtDlpRunner
             {
                 throw new InvalidOperationException(
                     "O Instagram não liberou a lista de vídeos desse perfil sem uma sessão. " +
-                    "Selecione Cookies: Edge, Chrome ou Firefox (com o Instagram logado) e tente ANALISAR CONTA/PÁGINA novamente.");
+                    "Selecione Cookies: Edge, Chrome ou Firefox (com o Instagram logado) e clique em TENTAR NOVAMENTE.");
             }
 
             throw new InvalidOperationException(
@@ -789,8 +967,8 @@ public sealed class YtDlpRunner
             FoundVideos = enriched.Length
         };
 
-        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{enriched.Length} vídeo(s) encontrado(s)"));
-        log.Report($"[Análise/Instagram] Encontrados {enriched.Length} vídeo(s) únicos.");
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{enriched.Length} vídeos encontrado(s)"));
+        log.Report($"[Análise/Instagram] Encontrados {enriched.Length} vídeos únicos.");
         return enriched;
     }
 
@@ -857,7 +1035,8 @@ public sealed class YtDlpRunner
         string stdout,
         List<CollectionMediaItem> items,
         HashSet<string> seen,
-        int limit)
+        int limit,
+        string category)
     {
         if (string.IsNullOrWhiteSpace(stdout))
             return;
@@ -929,7 +1108,8 @@ public sealed class YtDlpRunner
                     postUrl,
                     thumbnail,
                     date,
-                    details));
+                    details,
+                    category));
             }
         }
         catch (JsonException)
@@ -1006,7 +1186,7 @@ public sealed class YtDlpRunner
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
-        log.Report($"[Análise/Instagram] Metadados: {successful}/{items.Count} vídeo(s) completados; {unavailable} com algum dado indisponível.");
+        log.Report($"[Análise/Instagram] Metadados: {successful}/{items.Count} vídeos completados; {unavailable} com algum dado indisponível.");
         return results;
     }
 
@@ -1234,7 +1414,7 @@ public sealed class YtDlpRunner
 
             throw new InvalidOperationException(
                 "O TikTok não devolveu vídeos para esse perfil. Confira se o perfil abre normalmente no navegador selecionado, " +
-                "clique em Atualizar componentes e tente ANALISAR CONTA/PÁGINA novamente.");
+                "clique em Atualizar componentes e clique em TENTAR NOVAMENTE.");
         }
 
         LastAnalyzedProfile = (profile ?? BuildTikTokFallbackProfile(profileBase)) with
@@ -1242,8 +1422,8 @@ public sealed class YtDlpRunner
             FoundVideos = items.Count
         };
 
-        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{items.Count} vídeo(s) encontrado(s)"));
-        log.Report($"[Análise/TikTok] Encontrados {items.Count} vídeo(s) únicos.");
+        progress.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", $"{items.Count} vídeos encontrado(s)"));
+        log.Report($"[Análise/TikTok] Encontrados {items.Count} vídeos únicos.");
         return items;
     }
 
@@ -1757,10 +1937,11 @@ public sealed class YtDlpRunner
             return null;
 
         var platform = PlatformName(url);
-        var username = ReadString(root, "uploader")
+        var username = ReadString(root, "uploader_id")
+                       ?? ReadString(root, "channel_id")
+                       ?? ReadString(root, "uploader")
                        ?? ReadString(root, "channel")
                        ?? ReadString(root, "playlist_uploader")
-                       ?? ReadString(root, "uploader_id")
                        ?? string.Empty;
         var displayName = ReadString(root, "channel")
                           ?? ReadString(root, "uploader")
@@ -1803,25 +1984,40 @@ public sealed class YtDlpRunner
 
     private static string ReadThumbnailUrl(JsonElement element)
     {
-        var direct = ReadString(element, "thumbnail");
-        if (!string.IsNullOrWhiteSpace(direct))
-            return direct;
-
         if (element.ValueKind == JsonValueKind.Object &&
             element.TryGetProperty("thumbnails", out var thumbnails) &&
             thumbnails.ValueKind == JsonValueKind.Array)
         {
-            string result = string.Empty;
+            const int targetWidth = 480;
+            string bestUrl = string.Empty;
+            var bestScore = int.MaxValue;
+
             foreach (var thumb in thumbnails.EnumerateArray())
             {
-                if (thumb.ValueKind != JsonValueKind.Object) continue;
+                if (thumb.ValueKind != JsonValueKind.Object)
+                    continue;
+
                 var value = ReadString(thumb, "url");
-                if (!string.IsNullOrWhiteSpace(value)) result = value;
+                if (string.IsNullOrWhiteSpace(value))
+                    continue;
+
+                var width = ReadInt(thumb, "width");
+                var score = width.HasValue && width.Value > 0
+                    ? Math.Abs(width.Value - targetWidth)
+                    : 100_000;
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestUrl = value;
+                }
             }
-            return result;
+
+            if (!string.IsNullOrWhiteSpace(bestUrl))
+                return bestUrl;
         }
 
-        return string.Empty;
+        return ReadString(element, "thumbnail") ?? string.Empty;
     }
 
     private static string ReadProfileCreatedDate(JsonElement element)
@@ -1891,10 +2087,12 @@ public sealed class YtDlpRunner
         var details = new List<string>();
         var views = ReadLong(element, "view_count");
         var likes = ReadLong(element, "like_count");
+        var comments = ReadLong(element, "comment_count");
         var width = ReadInt(element, "width");
         var height = ReadInt(element, "height");
         if (views.HasValue) details.Add($"{views.Value:N0} visualizações");
         if (likes.HasValue) details.Add($"{likes.Value:N0} curtidas");
+        if (comments.HasValue) details.Add($"{comments.Value:N0} comentários");
         if (width.HasValue && height.HasValue) details.Add($"{width}×{height}");
         return string.Join(" • ", details);
     }
@@ -1907,10 +2105,12 @@ public sealed class YtDlpRunner
                     ?? ReadLong(metadata, "play_count")
                     ?? ReadLong(metadata, "views");
         var likes = ReadLong(metadata, "likes") ?? ReadLong(metadata, "like_count");
+        var comments = ReadLong(metadata, "comments") ?? ReadLong(metadata, "comment_count");
         var width = ReadInt(metadata, "width_original") ?? ReadInt(metadata, "width");
         var height = ReadInt(metadata, "height_original") ?? ReadInt(metadata, "height");
         if (views.HasValue) details.Add($"{views.Value:N0} visualizações");
         if (likes.HasValue) details.Add($"{likes.Value:N0} curtidas");
+        if (comments.HasValue) details.Add($"{comments.Value:N0} comentários");
         if (width.HasValue && height.HasValue && width > 0 && height > 0) details.Add($"{width}×{height}");
         return string.Join(" • ", details);
     }
@@ -2003,6 +2203,8 @@ public sealed class YtDlpRunner
             : string.Empty;
 
         _currentCompletedFilePath = null;
+        while (_completedFilePaths.TryDequeue(out _)) { }
+        _currentRunHadErrors = false;
         var timing = new RunTiming();
         var singleMedia = IsLikelySingleMediaUrl(url);
         if (singleMedia && options.AllowPlaylists)
@@ -2011,11 +2213,16 @@ public sealed class YtDlpRunner
         var reuseKey = singleMedia ? AppCache.BuildDownloadKey(url, options) : string.Empty;
         if (singleMedia && CanReuseCompletedFile(options) && AppCache.TryGetReusableDownload(reuseKey, out var reusablePath))
         {
-            var cacheUsable = true;
+            var cacheUsable = await IsReusableFileHealthyAsync(reusablePath, ct);
+            if (!cacheUsable)
+            {
+                AppCache.InvalidateReusableDownload(reuseKey);
+                log.Report("[Cache] Arquivo salvo está incompleto ou corrompido; será baixado novamente.");
+            }
 
             // Nunca devolve silenciosamente um MP4 antigo em AV1/VP9/Opus.
             // Antes de reutilizar o arquivo, valida a mesma regra aplicada aos downloads novos.
-            if (ShouldGuaranteeCompatibleMp4(options))
+            if (cacheUsable && ShouldGuaranteeCompatibleMp4(options))
             {
                 try
                 {
@@ -2090,22 +2297,29 @@ public sealed class YtDlpRunner
         await Task.Delay(80, CancellationToken.None);
 
         var exitCode = _process.ExitCode;
+        if (!singleMedia && exitCode == 0 && _currentRunHadErrors)
+            exitCode = 1;
         var processEndedAt = timing.Total.Elapsed;
         var compatibilityElapsed = TimeSpan.Zero;
 
         string? completedPath = null;
+        var capturedPaths = _completedFilePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         if (exitCode == 0)
         {
-            completedPath = ResolveCompletedMediaPath(options, url, processStartedUtc, uniqueSuffix);
+            completedPath = capturedPaths.LastOrDefault()
+                            ?? ResolveCompletedMediaPath(options, url, processStartedUtc, uniqueSuffix);
             if (string.IsNullOrWhiteSpace(completedPath) || !File.Exists(completedPath))
             {
                 log.Report("[Arquivo] ERRO: o yt-dlp terminou, mas o Plutao não conseguiu localizar o arquivo final.");
-                log.Report("[Arquivo] O download não será marcado como concluído para evitar entregar um MP4 sem validação de codec.");
+                log.Report("[Arquivo] O download não será marcado como concluído sem validação do arquivo.");
                 return 2;
             }
 
             _currentCompletedFilePath = completedPath;
-            LastCompletedFilePath = completedPath;
             log.Report($"[Arquivo final] {completedPath}");
         }
 
@@ -2114,9 +2328,17 @@ public sealed class YtDlpRunner
             try
             {
                 var compatibilityTimer = Stopwatch.StartNew();
-                await EnsureCompatibleMp4Async(completedPath!, options, itemIndex, itemCount, log, progress, ct);
+                var pathsToValidate = capturedPaths.Length > 0
+                    ? capturedPaths
+                    : new[] { completedPath! };
+
+                foreach (var pathToValidate in pathsToValidate.Where(File.Exists))
+                    await EnsureCompatibleMp4Async(pathToValidate, options, itemIndex, itemCount, log, progress, ct);
+
                 compatibilityTimer.Stop();
                 compatibilityElapsed = compatibilityTimer.Elapsed;
+                _currentCompletedFilePath = completedPath;
+                LastCompletedFilePath = completedPath;
             }
             catch (OperationCanceledException)
             {
@@ -2124,9 +2346,14 @@ public sealed class YtDlpRunner
             }
             catch (Exception ex)
             {
+                LastCompletedFilePath = null;
                 log.Report("[Compatibilidade] ERRO ao validar/converter o MP4: " + ex.Message);
                 return 2;
             }
+        }
+        else if (exitCode == 0)
+        {
+            LastCompletedFilePath = completedPath;
         }
 
         timing.Total.Stop();
@@ -2286,6 +2513,8 @@ public sealed class YtDlpRunner
     {
         if (string.IsNullOrWhiteSpace(rawLine)) return;
         var line = AnsiRegex.Replace(rawLine, string.Empty).TrimEnd();
+        if (line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+            _currentRunHadErrors = true;
 
         if (line.StartsWith(FilePrefix, StringComparison.Ordinal))
         {
@@ -2293,7 +2522,7 @@ public sealed class YtDlpRunner
             if (!string.IsNullOrWhiteSpace(path) && IsMediaFile(path))
             {
                 _currentCompletedFilePath = path;
-                LastCompletedFilePath = path;
+                _completedFilePaths.Enqueue(path);
                 log.Report($"[Arquivo] {path}");
             }
             return;
@@ -2405,7 +2634,7 @@ public sealed class YtDlpRunner
         if (!string.IsNullOrWhiteSpace(candidate) && IsMediaFile(candidate))
         {
             _currentCompletedFilePath = candidate;
-            LastCompletedFilePath = candidate;
+            _completedFilePaths.Enqueue(candidate);
         }
     }
 
@@ -2416,10 +2645,32 @@ public sealed class YtDlpRunner
     }
 
     private static bool CanReuseCompletedFile(DownloadOptions options)
-        => !options.SaveThumbnail &&
+        => options.ExistingFileBehavior != ExistingFileBehavior.Replace &&
+           !options.SaveThumbnail &&
            !options.SaveInfoJson &&
            !options.UseArchive &&
            string.IsNullOrWhiteSpace(options.SelectedPlaylistItems);
+
+    private async Task<bool> IsReusableFileHealthyAsync(string path, CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(path) || new FileInfo(path).Length < 1024)
+                return false;
+
+            var videoCodec = await ProbeCodecAsync(path, "v:0", ct);
+            var audioCodec = await ProbeCodecAsync(path, "a:0", ct);
+            return !string.IsNullOrWhiteSpace(videoCodec) || !string.IsNullOrWhiteSpace(audioCodec);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private IEnumerable<string> BuildArguments(string url, DownloadOptions o, string uniqueSuffix)
     {
@@ -2499,7 +2750,7 @@ public sealed class YtDlpRunner
 
         if (url.Contains("tiktok.com", StringComparison.OrdinalIgnoreCase))
         {
-            // TikTok muda com frequencia e costuma responder melhor com um UA de navegador atual.
+            // TikTok muda com frequência e costuma responder melhor com um UA de navegador atual.
             args.Add("--user-agent");
             args.Add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36");
         }
@@ -2638,8 +2889,8 @@ public sealed class YtDlpRunner
         if (container.Equals("webm", StringComparison.OrdinalIgnoreCase))
         {
             if (height.HasValue)
-                return $"bv*{exact}[ext=webm]+ba[ext=webm]/b[ext=webm]{exact}/bv*{limit}[ext=webm]+ba[ext=webm]/b[ext=webm]{limit}/bv*{limit}+ba/b{limit}/b";
-            return "bv*[ext=webm]+ba[ext=webm]/b[ext=webm]/bv*+ba/b";
+                return $"bv*[ext=webm]{exact}+ba[ext=webm]/b[ext=webm]{exact}/bv*[ext=webm]{limit}+ba[ext=webm]/b[ext=webm]{limit}";
+            return "bv*[ext=webm]+ba[ext=webm]/b[ext=webm]";
         }
 
         if (height.HasValue)
@@ -2662,14 +2913,15 @@ public sealed class YtDlpRunner
     {
         var videoCodec = await ProbeCodecAsync(path, "v:0", ct);
         var audioCodec = await ProbeCodecAsync(path, "a:0", ct);
-        var actualHeight = await ProbeHeightAsync(path, ct);
+        var (actualWidth, actualHeight) = await ProbeDimensionsAsync(path, ct);
         var requestedHeight = ParseQualityHeight(options.Quality);
 
-        // Regra automática:
-        // até 1080p -> H.264/AAC;
-        // acima de 1080p -> HEVC/H.265 + AAC.
-        // Em "Melhor", a altura real do arquivo decide o codec final.
-        var effectiveHeight = actualHeight > 0 ? actualHeight : requestedHeight;
+        // Usa o menor lado como classe de resolução. Assim um Short 1080x1920
+        // continua sendo tratado como 1080p, enquanto 2560x1440 vira 1440p.
+        var actualResolution = actualWidth > 0 && actualHeight > 0
+            ? Math.Min(actualWidth, actualHeight)
+            : actualHeight;
+        var effectiveHeight = actualResolution > 0 ? actualResolution : requestedHeight;
         var targetHevc = effectiveHeight > 1080;
         var targetCodecName = targetHevc ? "HEVC/H.265" : "H.264";
         var videoCompatible = targetHevc
@@ -2834,14 +3086,30 @@ public sealed class YtDlpRunner
             if (!result.Success || !File.Exists(tempPath))
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(result.Error) ? "FFmpeg falhou durante a conversão." : result.Error);
 
+            var tempVideoCodec = await ProbeCodecAsync(tempPath, "v:0", ct);
+            var tempAudioCodec = await ProbeCodecAsync(tempPath, "a:0", ct);
+            var (tempWidth, tempHeight) = await ProbeDimensionsAsync(tempPath, ct);
+            var tempResolution = tempWidth > 0 && tempHeight > 0 ? Math.Min(tempWidth, tempHeight) : tempHeight;
+            var tempTargetHevc = (tempResolution > 0 ? tempResolution : effectiveHeight) > 1080;
+            var tempVideoOk = tempTargetHevc
+                ? string.Equals(tempVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(tempVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(tempVideoCodec, "h264", StringComparison.OrdinalIgnoreCase);
+            var tempAudioOk = string.IsNullOrWhiteSpace(tempAudioCodec) ||
+                              string.Equals(tempAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
+
+            if (!tempVideoOk || !tempAudioOk)
+                throw new InvalidOperationException(
+                    $"Verificação do arquivo convertido falhou: vídeo={EmptyAsUnknown(tempVideoCodec)}, áudio={EmptyAsUnknown(tempAudioCodec)}.");
+
+            // O original só é substituído depois que o temporário passou no ffprobe.
             File.Move(tempPath, path, true);
 
-            // Nunca confia apenas no exit code do FFmpeg. O arquivo final precisa
-            // realmente estar no codec prometido antes de ser marcado como concluído.
             var finalVideoCodec = await ProbeCodecAsync(path, "v:0", ct);
             var finalAudioCodec = await ProbeCodecAsync(path, "a:0", ct);
-            var finalHeight = await ProbeHeightAsync(path, ct);
-            var finalTargetHevc = (finalHeight > 0 ? finalHeight : effectiveHeight) > 1080;
+            var (finalWidth, finalHeight) = await ProbeDimensionsAsync(path, ct);
+            var finalResolution = finalWidth > 0 && finalHeight > 0 ? Math.Min(finalWidth, finalHeight) : finalHeight;
+            var finalTargetHevc = (finalResolution > 0 ? finalResolution : effectiveHeight) > 1080;
             var finalVideoOk = finalTargetHevc
                 ? string.Equals(finalVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
                   string.Equals(finalVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
@@ -2850,12 +3118,15 @@ public sealed class YtDlpRunner
                                string.Equals(finalAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
 
             if (!finalVideoOk || !finalAudioOk)
+            {
+                LastCompletedFilePath = null;
                 throw new InvalidOperationException(
                     $"Verificação final falhou: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}.");
+            }
 
             _currentCompletedFilePath = path;
             LastCompletedFilePath = path;
-            log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, altura={(finalHeight > 0 ? finalHeight + "p" : "desconhecida")}.");
+            log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, resolução={(finalResolution > 0 ? finalResolution + "p" : "desconhecida")}.");
             if (targetHevc && !videoCompatible)
                 log.Report(usedAmdAmf
                     ? "[Compatibilidade] HEVC codificado pela GPU AMD (AMF)."
@@ -2892,6 +3163,42 @@ public sealed class YtDlpRunner
             return 0;
         var digits = new string(quality.TakeWhile(char.IsDigit).ToArray());
         return int.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var height) ? height : 0;
+    }
+
+    private async Task<(int Width, int Height)> ProbeDimensionsAsync(string path, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = _tools.FfprobePath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var arg in new[] { "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path })
+            psi.ArgumentList.Add(arg);
+
+        using var probe = new Process { StartInfo = psi };
+        probe.Start();
+        var stdoutTask = probe.StandardOutput.ReadToEndAsync();
+        var stderrTask = probe.StandardError.ReadToEndAsync();
+        await probe.WaitForExitAsync(ct);
+        var stdout = (await stdoutTask).Trim();
+        _ = await stderrTask;
+
+        if (probe.ExitCode != 0)
+            return (0, 0);
+
+        var first = stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        var parts = first?.Split('x', 2);
+        return parts is { Length: 2 } &&
+               int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var width) &&
+               int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var height)
+            ? (width, height)
+            : (0, 0);
     }
 
     private async Task<int> ProbeHeightAsync(string path, CancellationToken ct)
@@ -2987,14 +3294,14 @@ public sealed class YtDlpRunner
         if (url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase))
         {
             if (string.Equals(options.BrowserCookies, "Nenhum", StringComparison.OrdinalIgnoreCase))
-                log.Report("[Dica Instagram] Perfis/contas frequentemente exigem uma sessao. Tente selecionar Cookies: Edge, Chrome ou Firefox usando uma conta que tenha acesso ao perfil.");
+                log.Report("[Dica Instagram] Perfis/contas frequentemente exigem uma sessão. Tente selecionar Cookies: Edge, Chrome ou Firefox usando uma conta que tenha acesso ao perfil.");
             else
                 log.Report("[Dica Instagram] Se aparecer erro ao ler cookies, feche completamente o navegador selecionado e tente novamente.");
         }
 
         if (url.Contains("tiktok.com", StringComparison.OrdinalIgnoreCase))
         {
-            log.Report("[Dica TikTok] Para contas/perfis, mantenha 'Baixar pagina/conta/canal/perfil completo' ativado. Se falhar, tente Cookies do navegador e Atualizar componentes.");
+            log.Report("[Dica TikTok] Para contas/perfis, mantenha 'Baixar página/conta/canal/perfil completo' ativado. Se falhar, tente Cookies do navegador e Atualizar componentes.");
         }
 
         if (url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
