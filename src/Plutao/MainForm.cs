@@ -2205,9 +2205,25 @@ public sealed class MainForm : Form
             return;
         }
 
+        const int maxLogChars = 900_000;
+        const int trimLogChars = 180_000;
+
+        if (txtLog.TextLength > maxLogChars)
+        {
+            var cut = Math.Min(trimLogChars, txtLog.TextLength);
+            var current = txtLog.Text;
+            var lineEnd = current.IndexOf('\n', cut);
+            if (lineEnd >= 0)
+                cut = lineEnd + 1;
+
+            txtLog.Select(0, cut);
+            txtLog.SelectedText = string.Empty;
+        }
+
         txtLog.AppendText(text + Environment.NewLine);
         txtLog.SelectionStart = txtLog.TextLength;
-        txtLog.ScrollToCaret();
+        if (_logVisible)
+            txtLog.ScrollToCaret();
     }
 
     private void SetProgressUi(DownloadProgressInfo info)
