@@ -32,7 +32,7 @@ public sealed class ToolManager
         Directory.CreateDirectory(TemporaryDirectory);
         MigrateLegacyTools();
 
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.5.8"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.5.9"));
 
         // O HttpClient usa 100 s por padrão. O pacote do FFmpeg pode levar mais
         // que isso em conexões lentas e acabava sendo mostrado como "cancelado".
@@ -102,9 +102,17 @@ public sealed class ToolManager
     {
         const string url = "https://github.com/gdl-org/builds/releases/latest/download/gallery-dl_windows.exe";
         log?.Report("[Componentes] Baixando analisador de perfis (gallery-dl)...");
-        var temp = Path.Combine(TemporaryDirectory, "gallery-dl.exe.download");
-        await DownloadFileAsync(url, temp, "Baixando analisador de perfis", progress, ct);
-        File.Move(temp, GalleryDlPath, true);
+        var temp = Path.Combine(TemporaryDirectory, $"gallery-dl-{Guid.NewGuid():N}.exe.download");
+        try
+        {
+            await DownloadFileAsync(url, temp, "Baixando analisador de perfis", progress, ct);
+            InstallExecutable(temp, GalleryDlPath, "gallery-dl");
+        }
+        finally
+        {
+            TryDeleteFile(temp);
+        }
+
         progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "Analisador de perfis pronto"));
         log?.Report("[Componentes] gallery-dl pronto.");
     }
@@ -125,9 +133,17 @@ public sealed class ToolManager
     {
         const string url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
         log?.Report("[Componentes] Baixando/atualizando yt-dlp...");
-        var temp = Path.Combine(TemporaryDirectory, "yt-dlp.exe.download");
-        await DownloadFileAsync(url, temp, "Baixando yt-dlp", progress, ct);
-        File.Move(temp, YtDlpPath, true);
+        var temp = Path.Combine(TemporaryDirectory, $"yt-dlp-{Guid.NewGuid():N}.exe.download");
+        try
+        {
+            await DownloadFileAsync(url, temp, "Baixando yt-dlp", progress, ct);
+            InstallExecutable(temp, YtDlpPath, "yt-dlp");
+        }
+        finally
+        {
+            TryDeleteFile(temp);
+        }
+
         progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "yt-dlp pronto"));
         log?.Report("[Componentes] yt-dlp pronto.");
     }
@@ -249,7 +265,7 @@ public sealed class ToolManager
             if (deno is null)
                 throw new InvalidOperationException("Deno não encontrado no pacote baixado.");
 
-            File.Copy(deno, DenoPath, true);
+            InstallExecutable(deno, DenoPath, "Deno");
             progress?.Report(new DownloadProgressInfo(0, 0, 100, "", "", "", "Deno pronto"));
             log?.Report("[Componentes] Deno pronto.");
         }
@@ -309,6 +325,26 @@ public sealed class ToolManager
     private static bool IsYouTubeUrl(string url)
         => url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
            url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+
+    private void InstallExecutable(string sourcePath, string destinationPath, string displayName)
+    {
+        Directory.CreateDirectory(ToolsDirectory);
+        var staged = destinationPath + $".new-{Guid.NewGuid():N}";
+        try
+        {
+            // Copia primeiro para o mesmo volume de ToolsDirectory. Isso evita
+            // File.Move falhar quando a pasta temporária escolhida está em E:/D:.
+            File.Copy(sourcePath, staged, true);
+            if (!IsUsableExecutable(staged))
+                throw new InvalidOperationException($"O arquivo baixado de {displayName} é inválido ou incompleto.");
+
+            File.Move(staged, destinationPath, true);
+        }
+        finally
+        {
+            TryDeleteFile(staged);
+        }
+    }
 
     private async Task DownloadFileAsync(
         string url,
