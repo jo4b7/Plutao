@@ -32,7 +32,7 @@ public sealed class ToolManager
         Directory.CreateDirectory(TemporaryDirectory);
         MigrateLegacyTools();
 
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.5.6"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Plutao", "0.5.7"));
 
         // O HttpClient usa 100 s por padrão. O pacote do FFmpeg pode levar mais
         // que isso em conexões lentas e acabava sendo mostrado como "cancelado".

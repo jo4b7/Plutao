@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.7
+
+- Corrige a área de resultados que podia permanecer oculta mesmo depois de um canal ser analisado com sucesso.
+- Miniaturas individuais do YouTube usam `hqdefault.jpg` por ID como fallback estável.
+- Miniaturas da lista de canais do YouTube também priorizam JPG compatível com WinForms.
+- Falhas ao carregar uma miniatura deixam de exibir o ícone de imagem quebrada.
+- A gaveta de **Configurações** passa a abrir e fechar com transição lateral suave.
+- **Diagnóstico** e **resultados** ganham transições de expansão/recolhimento.
+- Painéis animados usam double buffering para reduzir cintilação e aparência serrilhada.
+- Cliques repetidos durante uma animação são ignorados até a transição terminar.
+- User-Agent interno e versão do aplicativo atualizados para 0.5.7.
+
 ## 0.5.6
 
 - Corrige colisão de cache entre playlists diferentes do YouTube.

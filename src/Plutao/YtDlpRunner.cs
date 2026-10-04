@@ -144,17 +144,21 @@ public sealed class YtDlpRunner
                       ?? ReadString(root, "creator")
                       ?? string.Empty;
         var canonicalUrl = ReadString(root, "webpage_url") ?? url;
+        var mediaId = ReadString(root, "id") ?? string.Empty;
+        var thumbnailUrl = IsYouTubeUrl(url) && !string.IsNullOrWhiteSpace(mediaId)
+            ? $"https://i.ytimg.com/vi/{mediaId}/hqdefault.jpg"
+            : ReadThumbnailUrl(root);
         var availableHeights = ReadAvailableVideoHeights(root);
         var maximumResolution = ReadMaximumVideoResolution(root);
         var preview = new MediaPreviewInfo(
             canonicalUrl,
             PlatformName(url),
-            ReadString(root, "id") ?? string.Empty,
+            mediaId,
             CleanDisplayTitle(title),
             creator,
             FormatDuration(ReadDouble(root, "duration")),
             ReadMediaDate(root),
-            ReadThumbnailUrl(root),
+            thumbnailUrl,
             ReadLong(root, "view_count"),
             ReadLong(root, "like_count"),
             maximumResolution.Width,
@@ -680,6 +684,9 @@ public sealed class YtDlpRunner
                                 ?? (!string.IsNullOrWhiteSpace(id) ? id : $"Mídia {index}");
                     var rawUrl = ReadString(entry, "webpage_url") ?? ReadString(entry, "url") ?? string.Empty;
                     var itemUrl = NormalizeYouTubeMediaUrl(rawUrl, id);
+                    var thumbnailUrl = !string.IsNullOrWhiteSpace(id)
+                        ? $"https://i.ytimg.com/vi/{id}/hqdefault.jpg"
+                        : ReadThumbnailUrl(entry);
 
                     items.Add(new CollectionMediaItem(
                         index,
@@ -687,7 +694,7 @@ public sealed class YtDlpRunner
                         CleanDisplayTitle(title),
                         FormatDuration(ReadDouble(entry, "duration")),
                         itemUrl,
-                        ReadThumbnailUrl(entry),
+                        thumbnailUrl,
                         ReadMediaDate(entry),
                         FormatMediaDetails(entry),
                         category));

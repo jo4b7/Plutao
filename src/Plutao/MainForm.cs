@@ -93,6 +93,9 @@ public sealed class MainForm : Form
     private string? _activeOutputDirectory;
     private bool _advancedVisible;
     private bool _logVisible;
+    private bool _resultsVisible;
+    private bool _drawerAnimating;
+    private bool _workspaceAnimating;
     private bool _busy;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
@@ -180,7 +183,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.6",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.7",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -630,6 +633,11 @@ public sealed class MainForm : Form
         Controls.Add(settingsDrawer);
         settingsDrawer.BringToFront();
 
+        EnableDoubleBuffering(settingsDrawer);
+        EnableDoubleBuffering(profileWorkspace);
+        EnableDoubleBuffering(profileSelection);
+        EnableDoubleBuffering(grpLog);
+
         SetAdvancedVisible(false);
         SetLogVisible(false);
     }
@@ -646,6 +654,56 @@ public sealed class MainForm : Form
         }
     }
 
+    private async Task AnimateAdvancedVisibleAsync(bool visible)
+    {
+        if (_drawerAnimating || _advancedVisible == visible || IsDisposed)
+            return;
+
+        _drawerAnimating = true;
+        _advancedVisible = visible;
+        btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
+
+        try
+        {
+            var width = SettingsDrawerWidth();
+            settingsDrawer.Width = width;
+            settingsDrawer.Height = ClientSize.Height;
+            settingsDrawer.Top = 0;
+
+            var shownLeft = Math.Max(0, ClientSize.Width - width);
+            var startLeft = visible ? ClientSize.Width : settingsDrawer.Left;
+            var endLeft = visible ? shownLeft : ClientSize.Width;
+
+            if (visible)
+            {
+                settingsDrawer.Left = startLeft;
+                settingsDrawer.Visible = true;
+                settingsDrawer.BringToFront();
+            }
+
+            var timer = Stopwatch.StartNew();
+            const double durationMs = 200d;
+            while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+            {
+                var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                var eased = 1d - Math.Pow(1d - t, 3d);
+                settingsDrawer.Left = (int)Math.Round(startLeft + ((endLeft - startLeft) * eased));
+                await Task.Delay(15);
+            }
+
+            if (IsDisposed)
+                return;
+
+            settingsDrawer.Left = endLeft;
+            if (!visible)
+                settingsDrawer.Visible = false;
+        }
+        finally
+        {
+            _drawerAnimating = false;
+        }
+    }
+
     private void SetLogVisible(bool visible)
     {
         _logVisible = visible;
@@ -653,12 +711,33 @@ public sealed class MainForm : Form
         UpdateWorkspaceLayout();
     }
 
+    private async Task SetLogVisibleAnimatedAsync(bool visible)
+    {
+        if (_workspaceAnimating || _logVisible == visible)
+            return;
+
+        _logVisible = visible;
+        btnToggleLog.Text = visible ? "Ocultar diagnóstico" : "Diagnóstico";
+        await AnimateWorkspaceTransitionAsync();
+    }
+
     private void UpdateWorkspaceLayout()
     {
-        var profileVisible = profileSelection.Visible;
-        profileWorkspace.Visible = profileVisible || _logVisible;
-        grpLog.Visible = _logVisible;
+        var profileVisible = _resultsVisible && profileSelection.HasData;
+        var workspaceVisible = profileVisible || _logVisible;
 
+        profileSelection.Visible = profileVisible;
+        grpLog.Visible = _logVisible;
+        profileWorkspace.Visible = workspaceVisible;
+
+        if (workspaceVisible)
+            profileWorkspace.Height = profileSelection.Height;
+
+        ConfigureWorkspaceColumns(profileVisible);
+    }
+
+    private void ConfigureWorkspaceColumns(bool profileVisible)
+    {
         if (_logVisible && profileVisible)
         {
             var diagnosticPercent = ClientSize.Width >= 1600 ? 34 : ClientSize.Width >= 1100 ? 30 : 28;
@@ -686,17 +765,147 @@ public sealed class MainForm : Form
         }
     }
 
+    private async Task AnimateWorkspaceTransitionAsync()
+    {
+        if (_workspaceAnimating || IsDisposed)
+        {
+            UpdateWorkspaceLayout();
+            return;
+        }
+
+        _workspaceAnimating = true;
+        try
+        {
+            var profileVisible = _resultsVisible && profileSelection.HasData;
+            var shouldShow = profileVisible || _logVisible;
+            var wasVisible = profileWorkspace.Visible;
+            var targetHeight = Math.Max(1, profileSelection.Height);
+
+            profileSelection.Visible = profileVisible;
+            grpLog.Visible = _logVisible;
+
+            if (shouldShow && !wasVisible)
+            {
+                ConfigureWorkspaceColumns(profileVisible);
+                profileWorkspace.Height = 0;
+                profileWorkspace.Visible = true;
+
+                var timer = Stopwatch.StartNew();
+                const double durationMs = 190d;
+                while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+                {
+                    var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                    var eased = 1d - Math.Pow(1d - t, 3d);
+                    profileWorkspace.Height = Math.Max(1, (int)Math.Round(targetHeight * eased));
+                    await Task.Delay(15);
+                }
+
+                if (!IsDisposed)
+                    profileWorkspace.Height = targetHeight;
+            }
+            else if (!shouldShow && wasVisible)
+            {
+                var startHeight = Math.Max(1, profileWorkspace.Height);
+                var timer = Stopwatch.StartNew();
+                const double durationMs = 170d;
+                while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+                {
+                    var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                    var eased = t * t;
+                    profileWorkspace.Height = Math.Max(1, (int)Math.Round(startHeight * (1d - eased)));
+                    await Task.Delay(15);
+                }
+
+                if (!IsDisposed)
+                {
+                    profileWorkspace.Visible = false;
+                    profileWorkspace.Height = targetHeight;
+                }
+            }
+            else if (shouldShow)
+            {
+                profileWorkspace.Visible = true;
+                profileWorkspace.Height = targetHeight;
+
+                var widths = profileWorkspace.GetColumnWidths();
+                var totalWidth = Math.Max(1, profileWorkspace.ClientSize.Width);
+                var startLogWidth = widths.Length > 1 ? widths[1] : 0;
+                int endLogWidth;
+                if (!_logVisible)
+                {
+                    endLogWidth = 0;
+                }
+                else if (!profileVisible)
+                {
+                    endLogWidth = totalWidth;
+                }
+                else
+                {
+                    var diagnosticPercent = ClientSize.Width >= 1600 ? 34 : ClientSize.Width >= 1100 ? 30 : 28;
+                    endLogWidth = (int)Math.Round(totalWidth * diagnosticPercent / 100d);
+                }
+
+                grpLog.Visible = _logVisible;
+                var timer = Stopwatch.StartNew();
+                const double durationMs = 180d;
+                while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+                {
+                    var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                    var eased = 1d - Math.Pow(1d - t, 3d);
+                    var logWidth = (int)Math.Round(startLogWidth + ((endLogWidth - startLogWidth) * eased));
+                    profileWorkspace.ColumnStyles[0].SizeType = SizeType.Absolute;
+                    profileWorkspace.ColumnStyles[0].Width = Math.Max(0, totalWidth - logWidth);
+                    profileWorkspace.ColumnStyles[1].SizeType = SizeType.Absolute;
+                    profileWorkspace.ColumnStyles[1].Width = Math.Max(0, logWidth);
+                    await Task.Delay(15);
+                }
+            }
+
+            if (!IsDisposed)
+                UpdateWorkspaceLayout();
+        }
+        finally
+        {
+            _workspaceAnimating = false;
+        }
+    }
+
+    private int SettingsDrawerWidth()
+    {
+        var width = Math.Clamp((int)(ClientSize.Width * 0.46), 460, 660);
+        return Math.Min(width, Math.Max(360, ClientSize.Width - 32));
+    }
+
     private void PositionSettingsDrawer()
     {
-        if (!IsHandleCreated)
+        if (!IsHandleCreated || _drawerAnimating)
             return;
 
-        var width = Math.Clamp((int)(ClientSize.Width * 0.46), 460, 660);
-        width = Math.Min(width, Math.Max(360, ClientSize.Width - 32));
+        var width = SettingsDrawerWidth();
         settingsDrawer.Width = width;
         settingsDrawer.Height = ClientSize.Height;
         settingsDrawer.Left = Math.Max(0, ClientSize.Width - width);
         settingsDrawer.Top = 0;
+    }
+
+    private static void EnableDoubleBuffering(Control control)
+    {
+        try
+        {
+            var property = typeof(Control).GetProperty(
+                "DoubleBuffered",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            property?.SetValue(control, true);
+        }
+        catch
+        {
+        }
+
+        foreach (Control child in control.Controls)
+        {
+            if (child is System.Windows.Forms.Panel or TableLayoutPanel or UserControl or GroupBox)
+                EnableDoubleBuffering(child);
+        }
     }
 
     private void ApplyResponsiveSpacing()
@@ -874,21 +1083,21 @@ public sealed class MainForm : Form
 
         btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync(automatic: false);
         profileSelection.SelectionChanged += (_, _) => ApplyProfileSelection();
-        profileSelection.HideRequested += (_, _) =>
+        profileSelection.HideRequested += async (_, _) =>
         {
-            profileSelection.Visible = false;
+            _resultsVisible = false;
             btnToggleResults.Visible = profileSelection.HasData;
             btnToggleResults.Text = "Mostrar resultados";
-            UpdateWorkspaceLayout();
+            await AnimateWorkspaceTransitionAsync();
         };
-        btnToggleResults.Click += (_, _) =>
+        btnToggleResults.Click += async (_, _) =>
         {
-            if (!profileSelection.HasData)
+            if (!profileSelection.HasData || _workspaceAnimating)
                 return;
 
-            profileSelection.Visible = !profileSelection.Visible;
-            btnToggleResults.Text = profileSelection.Visible ? "Ocultar resultados" : "Mostrar resultados";
-            UpdateWorkspaceLayout();
+            _resultsVisible = !_resultsVisible;
+            btnToggleResults.Text = _resultsVisible ? "Ocultar resultados" : "Mostrar resultados";
+            await AnimateWorkspaceTransitionAsync();
         };
 
         btnBrowseVideo.Click += (_, _) =>
@@ -938,11 +1147,19 @@ public sealed class MainForm : Form
         btnStop.Click += (_, _) => StopDownload();
         btnUpdate.Click += async (_, _) => await RunToolActionAsync();
         btnClearLog.Click += (_, _) => txtLog.Clear();
-        btnAdvanced.Click += (_, _) => SetAdvancedVisible(!_advancedVisible);
-        btnCloseSettings.Click += (_, _) => SetAdvancedVisible(false);
-        btnToggleLog.Click += (_, _) => SetLogVisible(!_logVisible);
+        btnAdvanced.Click += async (_, _) => await AnimateAdvancedVisibleAsync(!_advancedVisible);
+        btnCloseSettings.Click += async (_, _) => await AnimateAdvancedVisibleAsync(false);
+        btnToggleLog.Click += async (_, _) => await SetLogVisibleAnimatedAsync(!_logVisible);
         btnOpenLastFile.Click += (_, _) => OpenLastFile();
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
+        picPreview.LoadCompleted += (_, e) =>
+        {
+            if (e.Error is null)
+                return;
+
+            picPreview.ImageLocation = null;
+            picPreview.Visible = false;
+        };
 
         Shown += (_, _) =>
         {
@@ -1140,16 +1357,26 @@ public sealed class MainForm : Form
         lblPreviewDetails.Text = string.Join("  •  ", details);
         ApplyAvailableQualities(preview);
 
-        if (!string.IsNullOrWhiteSpace(preview.ThumbnailUrl))
+        var thumbnailUrl = preview.ThumbnailUrl;
+        if (preview.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(preview.Id))
+        {
+            thumbnailUrl = $"https://i.ytimg.com/vi/{preview.Id}/hqdefault.jpg";
+        }
+
+        if (!string.IsNullOrWhiteSpace(thumbnailUrl))
         {
             try
             {
+                picPreview.ErrorImage = null;
+                picPreview.InitialImage = null;
                 picPreview.Visible = true;
-                picPreview.ImageLocation = preview.ThumbnailUrl;
+                picPreview.ImageLocation = thumbnailUrl;
                 picPreview.LoadAsync();
             }
             catch
             {
+                picPreview.ImageLocation = null;
                 picPreview.Visible = false;
             }
         }
@@ -1379,6 +1606,7 @@ public sealed class MainForm : Form
         _analyzedCollectionUrl = null;
         _selectedPlaylistItems = string.Empty;
         _selectedCollectionUrls.Clear();
+        _resultsVisible = false;
         profileSelection.ClearData();
         btnToggleResults.Visible = false;
         btnToggleResults.Text = "Mostrar resultados";
@@ -1492,10 +1720,10 @@ public sealed class MainForm : Form
 
             _analyzedCollectionUrl = targetUrl;
             profileSelection.LoadData(items, _runner.LastAnalyzedProfile);
-            profileSelection.Visible = true;
+            _resultsVisible = true;
             btnToggleResults.Visible = true;
             btnToggleResults.Text = "Ocultar resultados";
-            UpdateWorkspaceLayout();
+            await AnimateWorkspaceTransitionAsync();
             ApplyResponsiveSpacing();
             ApplyProfileSelection();
 
