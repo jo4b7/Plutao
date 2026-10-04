@@ -219,8 +219,8 @@ public sealed class YtDlpRunner
     {
         LastCompletedFilePath = null;
         _tools.TemporaryDirectory = options.TemporaryDirectory;
-        Directory.CreateDirectory(options.OutputDirectory);
-        Directory.CreateDirectory(options.TemporaryDirectory);
+        EnsureDirectoryWritable(options.OutputDirectory, "destino");
+        EnsureDirectoryWritable(options.TemporaryDirectory, "temporários");
 
         progress.Report(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando componentes"));
         log.Report("Preparando componentes...");
@@ -247,6 +247,25 @@ public sealed class YtDlpRunner
         }
 
         return hadErrors ? 1 : 0;
+    }
+
+    private static void EnsureDirectoryWritable(string path, string label)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException($"A pasta de {label} não foi definida.");
+
+        try
+        {
+            Directory.CreateDirectory(path);
+            var probe = Path.Combine(path, $".plutao-write-test-{Guid.NewGuid():N}.tmp");
+            using (File.Create(probe, 1, FileOptions.DeleteOnClose))
+            {
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new IOException($"A pasta de {label} não pode ser usada para gravação: {path}", ex);
+        }
     }
 
     public async Task<IReadOnlyList<CollectionMediaItem>> AnalyzeCollectionAsync(
