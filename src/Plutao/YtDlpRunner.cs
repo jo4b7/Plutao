@@ -35,6 +35,8 @@ public sealed class YtDlpRunner
         public bool DownloadStarted { get; set; }
         public TimeSpan AnalysisDuration { get; set; }
         public TimeSpan? FormatSelectionStartedAt { get; set; }
+        public TimeSpan LastProgressReportAt { get; set; }
+        public int LastCollectionIndex { get; set; }
     }
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
@@ -2577,8 +2579,27 @@ public sealed class YtDlpRunner
             var collectionCount = ParsePositiveInt(parts.ElementAtOrDefault(4));
             var title = parts.ElementAtOrDefault(5)?.Trim() ?? string.Empty;
 
-            progress.Report(new DownloadProgressInfo(
-                itemIndex, itemCount, percent, speed, eta, title, "Baixando", collectionIndex, collectionCount));
+            var shouldReport = false;
+            lock (timing.SyncRoot)
+            {
+                var now = timing.Total.Elapsed;
+                shouldReport =
+                    percent >= 100 ||
+                    collectionIndex != timing.LastCollectionIndex ||
+                    now - timing.LastProgressReportAt >= TimeSpan.FromMilliseconds(100);
+
+                if (shouldReport)
+                {
+                    timing.LastProgressReportAt = now;
+                    timing.LastCollectionIndex = collectionIndex;
+                }
+            }
+
+            if (shouldReport)
+            {
+                progress.Report(new DownloadProgressInfo(
+                    itemIndex, itemCount, percent, speed, eta, title, "Baixando", collectionIndex, collectionCount));
+            }
             return;
         }
 
