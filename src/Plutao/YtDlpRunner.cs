@@ -41,14 +41,53 @@ public sealed class YtDlpRunner
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
 
-    public void Stop()
+    public void Stop() => TryStopProcess(_process);
+
+    private static void TryStopProcess(Process? process)
     {
         try
         {
-            if (_process is { HasExited: false })
-                _process.Kill(true);
+            if (process is { HasExited: false })
+                process.Kill(true);
         }
         catch { }
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunCapturedProcessAsync(
+        ProcessStartInfo startInfo,
+        CancellationToken ct)
+    {
+        using var process = new Process { StartInfo = startInfo };
+        _process = process;
+
+        try
+        {
+            process.Start();
+            using var reg = ct.Register(() => TryStopProcess(process));
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            return (process.ExitCode, stdout, stderr);
+        }
+        finally
+        {
+            if (ReferenceEquals(_process, process))
+                _process = null;
+
+            if (ct.IsCancellationRequested)
+            {
+                TryStopProcess(process);
+                try
+                {
+                    if (!process.HasExited)
+                        process.WaitForExit(1500);
+                }
+                catch { }
+            }
+        }
     }
 
     public async Task<MediaPreviewInfo?> AnalyzeMediaAsync(
@@ -116,19 +155,14 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
         progress.Report(new DownloadProgressInfo(0, 0, 20, "", "", "", "Obtendo informações"));
         var timer = Stopwatch.StartNew();
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
         timer.Stop();
 
-        if (_process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
         {
             var message = stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(message)
@@ -333,22 +367,17 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
         progress.Report(new DownloadProgressInfo(0, 0, 15, "", "", "", "Analisando página/conta"));
         log.Report($"[Análise] Lendo itens de: {url}");
 
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             log.Report("[Análise] " + AnsiRegex.Replace(line, string.Empty));
 
-        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
             throw new InvalidOperationException("Não foi possível listar os vídeos dessa página/conta. Confira o log e, se necessário, tente usar Cookies do navegador.");
 
         if (string.IsNullOrWhiteSpace(stdout))
@@ -642,14 +671,9 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         if (!string.IsNullOrWhiteSpace(stderr))
         {
@@ -1035,19 +1059,14 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             log.Report("[Análise/Instagram] " + AnsiRegex.Replace(line, string.Empty));
 
-        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
             return string.Empty;
 
         return stdout;
@@ -1495,19 +1514,14 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             log.Report("[Análise/TikTok] " + AnsiRegex.Replace(line, string.Empty));
 
-        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
             return string.Empty;
 
         return stdout;
@@ -3102,17 +3116,9 @@ public sealed class YtDlpRunner
             psi.ArgumentList.Add("+faststart");
             psi.ArgumentList.Add(tempPath);
 
-            _process = new Process { StartInfo = psi };
-            _process.Start();
-            using var reg = ct.Register(Stop);
-            var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-            var stderrTask = _process.StandardError.ReadToEndAsync();
-            await _process.WaitForExitAsync(ct);
-            _ = await stdoutTask;
-            var stderr = await stderrTask;
-
-            var success = _process.ExitCode == 0 && File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
-            return (success, stderr.Trim());
+            var run = await RunCapturedProcessAsync(psi, ct);
+            var success = run.ExitCode == 0 && File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
+            return (success, run.Stderr.Trim());
         }
 
         try
