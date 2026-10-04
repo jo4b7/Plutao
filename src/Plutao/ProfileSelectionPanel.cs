@@ -30,7 +30,6 @@ public sealed class ProfileSelectionPanel : UserControl
     private readonly ConcurrentDictionary<int, DateTime> _thumbnailRetryAfter = new();
     private readonly SemaphoreSlim _thumbnailGate = new(6, 6);
     private readonly System.Windows.Forms.Timer _thumbnailTimer = new() { Interval = 70 };
-    private bool _suppressSelectionEvents;
     private bool _visualWorkPaused;
     private int _currentRowHeight = 92;
     private int _viewGeneration;
@@ -145,8 +144,6 @@ public sealed class ProfileSelectionPanel : UserControl
         _profile = profile;
         _activeCategory = "Todos";
         _viewGeneration++;
-        _suppressSelectionEvents = true;
-
         _grid.BeginBatchUpdate();
         _grid.SuspendLayout();
         try
@@ -162,7 +159,6 @@ public sealed class ProfileSelectionPanel : UserControl
             _grid.EndBatchUpdate();
         }
 
-        _suppressSelectionEvents = false;
         UpdateSummary();
         Visible = true;
 
@@ -749,7 +745,6 @@ public sealed class ProfileSelectionPanel : UserControl
 
                     if (_rowImages.TryGetValue(rowIndex, out var oldImage))
                     {
-                        _grid.Rows[rowIndex].Cells[1].Value = null;
                         try { oldImage.Dispose(); } catch { }
                     }
 
