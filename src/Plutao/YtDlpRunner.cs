@@ -2318,24 +2318,34 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
-        _process.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        using var downloadProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        downloadProcess.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        downloadProcess.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        _process = downloadProcess;
 
         log.Report($"URL: {url}");
         progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Conectando à plataforma"));
         var processStartedUtc = DateTime.UtcNow;
-        _process.Start();
-        _process.BeginOutputReadLine();
-        _process.BeginErrorReadLine();
+        int exitCode;
+        try
+        {
+            downloadProcess.Start();
+            downloadProcess.BeginOutputReadLine();
+            downloadProcess.BeginErrorReadLine();
 
-        using var reg = ct.Register(Stop);
-        await _process.WaitForExitAsync(ct);
-        // Garante que os handlers de OutputDataReceived/ErrorDataReceived
-        // drenaram as últimas linhas (inclusive PLUTAO_FILE) antes de validar.
-        _process.WaitForExit();
+            using var reg = ct.Register(() => TryStopProcess(downloadProcess));
+            await downloadProcess.WaitForExitAsync(ct);
+            // Garante que os handlers de OutputDataReceived/ErrorDataReceived
+            // drenaram as últimas linhas (inclusive PLUTAO_FILE) antes de validar.
+            downloadProcess.WaitForExit();
+            exitCode = downloadProcess.ExitCode;
+        }
+        finally
+        {
+            if (ReferenceEquals(_process, downloadProcess))
+                _process = null;
+        }
 
-        var exitCode = _process.ExitCode;
         if (!singleMedia && exitCode == 0 && _currentRunHadErrors)
             exitCode = 1;
         var processEndedAt = timing.Total.Elapsed;
