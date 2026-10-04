@@ -2,7 +2,7 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.7 — miniaturas, resultados e transições suaves
+## v0.5.8 — layout responsivo e listas grandes
 
 A tela principal mantém o fluxo simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
 
@@ -12,9 +12,9 @@ O **Diagnóstico** não fica mais no fim da página: ele abre ao lado da área d
 
 As **Configurações** ficam em uma gaveta lateral que pode ser aberta mesmo durante downloads ou análises. Opções que podem ser alteradas continuam acessíveis; mudanças feitas durante uma execução entram na próxima tarefa, enquanto a atualização dos binários permanece bloqueada até a execução terminar.
 
-A v0.5.7 mantém as correções de estabilidade da v0.5.6 e melhora a experiência visual: a lista de resultados volta a aparecer corretamente após a análise de canais, miniaturas individuais do YouTube usam fallback JPG confiável e a interface ganha transições suaves para Configurações, Diagnóstico e resultados.
+A v0.5.8 corrige a troca entre janela normal e maximizada, faz a lista de vídeos ocupar corretamente a largura disponível, reduz travamentos em canais com milhares de mídias e melhora o carregamento de miniaturas de Shorts com múltiplos fallbacks JPG.
 
-A v0.5.7 mantém as melhorias anteriores em cache, validação final, progresso e geometria: qualidades reais por vídeo, canais do YouTube separados em Vídeos/Shorts/Lives, metadados complementares do Instagram e o analisador alternativo de perfis do TikTok quando o yt-dlp falha ao obter o `secUid`.
+A v0.5.8 mantém as melhorias anteriores em cache, validação final, progresso e geometria: qualidades reais por vídeo, canais do YouTube separados em Vídeos/Shorts/Lives, metadados complementares do Instagram e o analisador alternativo de perfis do TikTok quando o yt-dlp falha ao obter o `secUid`.
 
 - prévia automática para links individuais;
 - análise automática para perfis/canais/páginas;

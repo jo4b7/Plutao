@@ -84,6 +84,7 @@ public sealed class MainForm : Form
     private readonly Label lblVideoFormatCaption = new() { Text = "Formato", AutoSize = true };
     private readonly Label lblAudioFormatCaption = new() { Text = "Formato", AutoSize = true };
     private readonly System.Windows.Forms.Timer _previewTimer = new() { Interval = 700 };
+    private readonly System.Windows.Forms.Timer _layoutTimer = new() { Interval = 80 };
     private CancellationTokenSource? _previewCts;
     private Task? _previewTask;
 
@@ -96,6 +97,9 @@ public sealed class MainForm : Form
     private bool _resultsVisible;
     private bool _drawerAnimating;
     private bool _workspaceAnimating;
+    private int _drawerAnimationGeneration;
+    private int _workspaceAnimationGeneration;
+    private FormWindowState _lastWindowState = FormWindowState.Normal;
     private bool _busy;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
@@ -183,7 +187,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.7",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.8",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -417,7 +421,8 @@ public sealed class MainForm : Form
         grpLog.Controls.Add(txtLog);
 
         profileWorkspace.Name = "profileWorkspace";
-        profileWorkspace.Dock = DockStyle.Top;
+        profileWorkspace.Dock = DockStyle.Fill;
+        profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         profileWorkspace.AutoSize = false;
         profileWorkspace.Height = 520;
         profileWorkspace.ColumnCount = 2;
@@ -659,6 +664,7 @@ public sealed class MainForm : Form
         if (_drawerAnimating || _advancedVisible == visible || IsDisposed)
             return;
 
+        var generation = ++_drawerAnimationGeneration;
         _drawerAnimating = true;
         _advancedVisible = visible;
         btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
@@ -682,16 +688,20 @@ public sealed class MainForm : Form
             }
 
             var timer = Stopwatch.StartNew();
-            const double durationMs = 200d;
-            while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+            const double durationMs = 145d;
+            while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                   !IsDisposed &&
+                   generation == _drawerAnimationGeneration)
             {
                 var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                 var eased = 1d - Math.Pow(1d - t, 3d);
-                settingsDrawer.Left = (int)Math.Round(startLeft + ((endLeft - startLeft) * eased));
-                await Task.Delay(15);
+                var nextLeft = (int)Math.Round(startLeft + ((endLeft - startLeft) * eased));
+                if (settingsDrawer.Left != nextLeft)
+                    settingsDrawer.Left = nextLeft;
+                await Task.Delay(16);
             }
 
-            if (IsDisposed)
+            if (IsDisposed || generation != _drawerAnimationGeneration)
                 return;
 
             settingsDrawer.Left = endLeft;
@@ -700,7 +710,8 @@ public sealed class MainForm : Form
         }
         finally
         {
-            _drawerAnimating = false;
+            if (generation == _drawerAnimationGeneration)
+                _drawerAnimating = false;
         }
     }
 
@@ -734,6 +745,7 @@ public sealed class MainForm : Form
             profileWorkspace.Height = profileSelection.Height;
 
         ConfigureWorkspaceColumns(profileVisible);
+        profileWorkspace.PerformLayout();
     }
 
     private void ConfigureWorkspaceColumns(bool profileVisible)
@@ -773,6 +785,7 @@ public sealed class MainForm : Form
             return;
         }
 
+        var generation = ++_workspaceAnimationGeneration;
         _workspaceAnimating = true;
         try
         {
@@ -784,39 +797,63 @@ public sealed class MainForm : Form
             profileSelection.Visible = profileVisible;
             grpLog.Visible = _logVisible;
 
+            // Com milhares de linhas, animar o DataGridView quadro a quadro custa caro.
+            // Nesses casos usa uma transição curta e aplica o layout final de uma vez.
+            var largeCollection = profileSelection.TotalItems > 800;
+            if (largeCollection)
+            {
+                if (shouldShow)
+                {
+                    profileWorkspace.Visible = true;
+                    profileWorkspace.Height = targetHeight;
+                }
+                else
+                {
+                    profileWorkspace.Visible = false;
+                }
+
+                ConfigureWorkspaceColumns(profileVisible);
+                profileWorkspace.PerformLayout();
+                return;
+            }
+
             if (shouldShow && !wasVisible)
             {
                 ConfigureWorkspaceColumns(profileVisible);
-                profileWorkspace.Height = 0;
+                profileWorkspace.Height = 1;
                 profileWorkspace.Visible = true;
 
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 190d;
-                while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+                const double durationMs = 135d;
+                while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                       !IsDisposed &&
+                       generation == _workspaceAnimationGeneration)
                 {
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = 1d - Math.Pow(1d - t, 3d);
                     profileWorkspace.Height = Math.Max(1, (int)Math.Round(targetHeight * eased));
-                    await Task.Delay(15);
+                    await Task.Delay(16);
                 }
 
-                if (!IsDisposed)
+                if (!IsDisposed && generation == _workspaceAnimationGeneration)
                     profileWorkspace.Height = targetHeight;
             }
             else if (!shouldShow && wasVisible)
             {
                 var startHeight = Math.Max(1, profileWorkspace.Height);
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 170d;
-                while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+                const double durationMs = 120d;
+                while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                       !IsDisposed &&
+                       generation == _workspaceAnimationGeneration)
                 {
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = t * t;
                     profileWorkspace.Height = Math.Max(1, (int)Math.Round(startHeight * (1d - eased)));
-                    await Task.Delay(15);
+                    await Task.Delay(16);
                 }
 
-                if (!IsDisposed)
+                if (!IsDisposed && generation == _workspaceAnimationGeneration)
                 {
                     profileWorkspace.Visible = false;
                     profileWorkspace.Height = targetHeight;
@@ -847,8 +884,10 @@ public sealed class MainForm : Form
 
                 grpLog.Visible = _logVisible;
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 180d;
-                while (timer.Elapsed.TotalMilliseconds < durationMs && !IsDisposed)
+                const double durationMs = 130d;
+                while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                       !IsDisposed &&
+                       generation == _workspaceAnimationGeneration)
                 {
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = 1d - Math.Pow(1d - t, 3d);
@@ -857,17 +896,35 @@ public sealed class MainForm : Form
                     profileWorkspace.ColumnStyles[0].Width = Math.Max(0, totalWidth - logWidth);
                     profileWorkspace.ColumnStyles[1].SizeType = SizeType.Absolute;
                     profileWorkspace.ColumnStyles[1].Width = Math.Max(0, logWidth);
-                    await Task.Delay(15);
+                    await Task.Delay(16);
                 }
             }
 
-            if (!IsDisposed)
+            if (!IsDisposed && generation == _workspaceAnimationGeneration)
                 UpdateWorkspaceLayout();
         }
         finally
         {
-            _workspaceAnimating = false;
+            if (generation == _workspaceAnimationGeneration)
+                _workspaceAnimating = false;
         }
+    }
+
+    private void CancelUiAnimationsForResize()
+    {
+        _drawerAnimationGeneration++;
+        _workspaceAnimationGeneration++;
+        _drawerAnimating = false;
+        _workspaceAnimating = false;
+
+        if (_advancedVisible)
+        {
+            settingsDrawer.Visible = true;
+            settingsDrawer.BringToFront();
+        }
+
+        UpdateWorkspaceLayout();
+        PositionSettingsDrawer();
     }
 
     private int SettingsDrawerWidth()
@@ -923,15 +980,34 @@ public sealed class MainForm : Form
         SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
         profileSelection.ApplyResponsiveHeight(compact, roomy);
         profileWorkspace.Height = profileSelection.Height;
+        profileWorkspace.Dock = DockStyle.Fill;
+        profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        profileSelection.Dock = DockStyle.Fill;
+        grpLog.Dock = DockStyle.Fill;
         UpdateWorkspaceLayout();
+        profileWorkspace.PerformLayout();
         PositionSettingsDrawer();
 
         var root = Controls.Find("rootLayout", true).FirstOrDefault();
         if (root is TableLayoutPanel layout)
         {
             layout.Padding = new Padding(compact ? 14 : 24, compact ? 12 : 18, compact ? 14 : 24, 24);
+
+            // AutoSize mantinha a largura preferida antiga em algumas trocas
+            // entre janela e maximizado. A largura mínima acompanha o host atual.
+            if (layout.Parent is Control host)
+            {
+                var availableWidth = Math.Max(1, host.ClientSize.Width -
+                    (host is System.Windows.Forms.Panel panel && panel.VerticalScroll.Visible
+                        ? SystemInformation.VerticalScrollBarWidth
+                        : 0));
+                layout.MinimumSize = new Size(availableWidth, 0);
+            }
+
             foreach (Control child in layout.Controls)
                 child.Margin = new Padding(0, 0, 0, compact ? 8 : 12);
+
+            layout.PerformLayout();
         }
     }
 
@@ -1161,24 +1237,55 @@ public sealed class MainForm : Form
             picPreview.Visible = false;
         };
 
+        _layoutTimer.Tick += (_, _) =>
+        {
+            _layoutTimer.Stop();
+            ApplyResponsiveSpacing();
+        };
+
         Shown += (_, _) =>
         {
+            _lastWindowState = WindowState;
             FitToCurrentScreen();
             UpdateLinkPresentation();
         };
-        DpiChanged += (_, _) => BeginInvoke(new Action(FitToCurrentScreen));
+        DpiChanged += (_, _) => BeginInvoke(new Action(() =>
+        {
+            CancelUiAnimationsForResize();
+            ApplyResponsiveSpacing();
+        }));
         Resize += (_, _) =>
         {
-            ApplyResponsiveSpacing();
-            PositionSettingsDrawer();
+            if (WindowState == FormWindowState.Minimized)
+                return;
+
+            var stateChanged = WindowState != _lastWindowState;
+            _lastWindowState = WindowState;
+            CancelUiAnimationsForResize();
+
+            _layoutTimer.Stop();
+            if (stateChanged)
+            {
+                BeginInvoke(new Action(ApplyResponsiveSpacing));
+            }
+            else
+            {
+                _layoutTimer.Start();
+            }
         };
-        ResizeEnd += (_, _) => ApplyResponsiveSpacing();
+        ResizeEnd += (_, _) =>
+        {
+            _layoutTimer.Stop();
+            CancelUiAnimationsForResize();
+            ApplyResponsiveSpacing();
+        };
         FormClosing += (_, _) =>
         {
             SaveDestinationSettings();
             CancelPreview();
             StopDownload();
             _previewTimer.Dispose();
+            _layoutTimer.Dispose();
         };
     }
 

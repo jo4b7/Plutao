@@ -26,6 +26,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private readonly SemaphoreSlim _thumbnailGate = new(12, 12);
     private readonly System.Windows.Forms.Timer _thumbnailTimer = new() { Interval = 70 };
     private bool _suppressSelectionEvents;
+    private int _currentRowHeight = 92;
     private string _activeCategory = "Todos";
     private readonly Dictionary<string, Button> _categoryButtons = new(StringComparer.OrdinalIgnoreCase);
 
@@ -167,22 +168,16 @@ public sealed class ProfileSelectionPanel : UserControl
                 ? Math.Clamp((int)(hostHeight * 0.58), 560, 760)
                 : Math.Clamp((int)(hostHeight * 0.52), 440, 620);
 
-        Height = targetHeight;
+        if (Height != targetHeight)
+            Height = targetHeight;
 
-        var rowHeight = compact ? 82 : roomy ? 100 : 92;
-        _grid.RowTemplate.Height = rowHeight;
-        if (_grid.Rows.Count > 0 && _grid.Rows[0].Height != rowHeight)
+        // Não percorre milhares de linhas durante maximize/restore.
+        // O custo dessa operação era a principal causa dos engasgos em canais grandes.
+        const int rowHeight = 92;
+        if (_currentRowHeight != rowHeight)
         {
-            _grid.SuspendLayout();
-            try
-            {
-                foreach (DataGridViewRow row in _grid.Rows)
-                    row.Height = rowHeight;
-            }
-            finally
-            {
-                _grid.ResumeLayout(false);
-            }
+            _currentRowHeight = rowHeight;
+            _grid.RowTemplate.Height = rowHeight;
         }
 
         QueueVisibleThumbnails();
@@ -648,30 +643,24 @@ public sealed class ProfileSelectionPanel : UserControl
         try
         {
             var item = _items[rowIndex];
-            var thumbnailUrl = item.ThumbnailUrl;
-            if (string.IsNullOrWhiteSpace(thumbnailUrl) &&
-                !string.IsNullOrWhiteSpace(item.Id) &&
-                (item.Url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
-                 item.Url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase)))
-            {
-                thumbnailUrl = $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg";
-            }
-
-            if (string.IsNullOrWhiteSpace(thumbnailUrl))
-            {
-                _thumbnailLoaded.TryAdd(rowIndex, 0);
+            var candidates = ThumbnailCandidates(item);
+            if (candidates.Count == 0)
                 return;
-            }
 
             await _thumbnailGate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var image = await DownloadAndResizeAsync(thumbnailUrl, 112, 70, ct).ConfigureAwait(false);
-                if (image is null || ct.IsCancellationRequested)
+                Image? image = null;
+                foreach (var candidate in candidates)
                 {
-                    _thumbnailLoaded.TryAdd(rowIndex, 0);
-                    return;
+                    ct.ThrowIfCancellationRequested();
+                    image = await DownloadAndResizeAsync(candidate, 112, 70, ct).ConfigureAwait(false);
+                    if (image is not null)
+                        break;
                 }
+
+                if (image is null || ct.IsCancellationRequested)
+                    return;
 
                 if (IsDisposed)
                 {
@@ -712,6 +701,31 @@ public sealed class ProfileSelectionPanel : UserControl
         {
             _thumbnailLoading.TryRemove(rowIndex, out _);
         }
+    }
+
+    private static IReadOnlyList<string> ThumbnailCandidates(CollectionMediaItem item)
+    {
+        var candidates = new List<string>();
+        var isYouTube = item.Url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+                        item.Url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+
+        if (isYouTube && !string.IsNullOrWhiteSpace(item.Id))
+        {
+            // JPGs oficiais do YouTube funcionam com System.Drawing e cobrem
+            // vídeos comuns e Shorts. A URL do extrator fica como último fallback.
+            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/maxresdefault.jpg");
+            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/sddefault.jpg");
+            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg");
+            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg");
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.ThumbnailUrl) &&
+            !candidates.Contains(item.ThumbnailUrl, StringComparer.OrdinalIgnoreCase))
+        {
+            candidates.Add(item.ThumbnailUrl);
+        }
+
+        return candidates;
     }
 
     private async Task LoadAvatarAsync(CancellationToken ct)
