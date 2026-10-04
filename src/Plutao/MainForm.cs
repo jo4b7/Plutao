@@ -1416,9 +1416,26 @@ public sealed class MainForm : Form
         try { picPreview.CancelAsync(); } catch { }
         _previewThumbnailCandidates.Clear();
         _previewThumbnailIndex = 0;
-        try { _previewCts?.Cancel(); } catch { }
-        _previewCts?.Dispose();
+
+        var cts = _previewCts;
         _previewCts = null;
+        if (cts is null)
+            return;
+
+        try { cts.Cancel(); } catch { }
+
+        var runningTask = _previewTask;
+        if (runningTask is null || runningTask.IsCompleted)
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _ = runningTask.ContinueWith(
+            _ => cts.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task StopPreviewBeforeRunnerUseAsync()
