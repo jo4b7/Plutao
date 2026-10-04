@@ -712,7 +712,15 @@ public sealed class ProfileSelectionPanel : UserControl
 
                 if (image is null || ct.IsCancellationRequested)
                 {
-                    _thumbnailRetryAfter[rowIndex] = DateTime.UtcNow.AddSeconds(45);
+                    if (generation == _viewGeneration &&
+                        rowIndex < _visibleItems.Count &&
+                        string.Equals(
+                            SelectionKey(_visibleItems[rowIndex]),
+                            SelectionKey(item),
+                            StringComparison.Ordinal))
+                    {
+                        _thumbnailRetryAfter[rowIndex] = DateTime.UtcNow.AddSeconds(45);
+                    }
                     return;
                 }
 
