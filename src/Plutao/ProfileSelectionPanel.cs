@@ -19,6 +19,8 @@ public sealed class ProfileSelectionPanel : UserControl
     private static int _cacheWrites;
 
     private IReadOnlyList<CollectionMediaItem> _items = Array.Empty<CollectionMediaItem>();
+    private IReadOnlyList<CollectionMediaItem> _visibleItems = Array.Empty<CollectionMediaItem>();
+    private readonly HashSet<string> _selectedKeys = new(StringComparer.Ordinal);
     private ProfileInfo? _profile;
     private CancellationTokenSource? _imageCts;
     private readonly List<Image> _loadedImages = new();
@@ -31,6 +33,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private bool _suppressSelectionEvents;
     private bool _visualWorkPaused;
     private int _currentRowHeight = 92;
+    private int _viewGeneration;
     private string _activeCategory = "Todos";
     private readonly Dictionary<string, Button> _categoryButtons = new(StringComparer.OrdinalIgnoreCase);
 
@@ -107,9 +110,8 @@ public sealed class ProfileSelectionPanel : UserControl
     }
 
     public IReadOnlyList<CollectionMediaItem> SelectedItems
-        => _grid.Rows.Cast<DataGridViewRow>()
-            .Where(row => Convert.ToBoolean(row.Cells[0].Value ?? false))
-            .Select(row => (CollectionMediaItem)row.Tag!)
+        => _items
+            .Where(item => _selectedKeys.Contains(SelectionKey(item)))
             .ToArray();
 
     public ProfileSelectionPanel()
@@ -135,15 +137,21 @@ public sealed class ProfileSelectionPanel : UserControl
         _thumbnailRetryAfter.Clear();
 
         _items = items;
+        _visibleItems = items;
+        _selectedKeys.Clear();
+        foreach (var item in items)
+            _selectedKeys.Add(SelectionKey(item));
+
         _profile = profile;
         _activeCategory = "Todos";
+        _viewGeneration++;
         _suppressSelectionEvents = true;
 
         _grid.BeginBatchUpdate();
         _grid.SuspendLayout();
         try
         {
-            _grid.Rows.Clear();
+            _grid.RowCount = 0;
             PopulateProfile();
             PopulateGrid();
             BuildCategoryButtons();
@@ -171,8 +179,11 @@ public sealed class ProfileSelectionPanel : UserControl
         _thumbnailLoading.Clear();
         _thumbnailRetryAfter.Clear();
         _items = Array.Empty<CollectionMediaItem>();
+        _visibleItems = Array.Empty<CollectionMediaItem>();
+        _selectedKeys.Clear();
+        _viewGeneration++;
         _profile = null;
-        _grid.Rows.Clear();
+        _grid.RowCount = 0;
         _categoryBar.Controls.Clear();
         _categoryButtons.Clear();
         _categoryBar.Visible = false;
@@ -310,6 +321,7 @@ public sealed class ProfileSelectionPanel : UserControl
         _grid.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
         _grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
         _grid.RowTemplate.Height = 92;
+        _grid.VirtualMode = true;
 
         _grid.Columns.AddRange(
             new DataGridViewCheckBoxColumn
@@ -402,20 +414,9 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void PopulateGrid()
     {
-        if (_items.Count == 0) return;
-
-        _grid.Rows.Add(_items.Count);
-        for (var i = 0; i < _items.Count; i++)
-        {
-            var item = _items[i];
-            var row = _grid.Rows[i];
-            row.Tag = item;
-            row.Cells[0].Value = true;
-            row.Cells[1].Value = null;
-            row.Cells[2].Value = $"{item.Index:000}  —  {CompactText(item.Title, 240)}";
-            row.Cells[3].Value = CompactDetails(item);
-            UpdateRowVisual(row);
-        }
+        _visibleItems = _items;
+        _grid.RowCount = _visibleItems.Count;
+        _grid.Invalidate();
     }
 
     private void WireEvents()
@@ -436,6 +437,32 @@ public sealed class ProfileSelectionPanel : UserControl
             catch { }
         };
 
+        _grid.CellValueNeeded += (_, e) =>
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= _visibleItems.Count)
+                return;
+
+            var item = _visibleItems[e.RowIndex];
+            e.Value = e.ColumnIndex switch
+            {
+                0 => _selectedKeys.Contains(SelectionKey(item)),
+                1 => _rowImages.TryGetValue(e.RowIndex, out var image) ? image : null,
+                2 => $"{item.Index:000}  —  {CompactText(item.Title, 240)}",
+                3 => CompactDetails(item),
+                _ => null
+            };
+        };
+
+        _grid.RowPrePaint += (_, e) =>
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= _visibleItems.Count)
+                return;
+
+            UpdateRowVisual(
+                _grid.Rows[e.RowIndex],
+                _selectedKeys.Contains(SelectionKey(_visibleItems[e.RowIndex])));
+        };
+
         _grid.CellClick += (_, e) =>
         {
             if (e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count)
@@ -449,18 +476,6 @@ public sealed class ProfileSelectionPanel : UserControl
             ToggleRow(_grid.CurrentRow.Index);
             e.Handled = true;
         };
-        _grid.CellValueChanged += (_, e) =>
-        {
-            if (e.ColumnIndex != 0 || e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count)
-                return;
-
-            UpdateRowVisual(_grid.Rows[e.RowIndex]);
-            if (_suppressSelectionEvents)
-                return;
-
-            UpdateSummary();
-            SelectionChanged?.Invoke(this, EventArgs.Empty);
-        };
         _grid.Scroll += (_, _) => ScheduleVisibleThumbnailLoad();
         _grid.Resize += (_, _) => ScheduleVisibleThumbnailLoad();
         VisibleChanged += (_, _) =>
@@ -470,9 +485,10 @@ public sealed class ProfileSelectionPanel : UserControl
         };
         _grid.CellToolTipTextNeeded += (_, e) =>
         {
-            if (e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count) return;
-            if (_grid.Rows[e.RowIndex].Tag is not CollectionMediaItem item) return;
+            if (e.RowIndex < 0 || e.RowIndex >= _visibleItems.Count)
+                return;
 
+            var item = _visibleItems[e.RowIndex];
             if (e.ColumnIndex == 2)
                 e.ToolTipText = item.Title;
             else if (e.ColumnIndex == 3)
@@ -550,23 +566,31 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void ApplyCategoryFilter()
     {
+        _thumbnailTimer.Stop();
+        _viewGeneration++;
+
+        // A grade é virtual: trocar Vídeos/Shorts altera somente a visão lógica,
+        // sem percorrer e esconder milhares de DataGridViewRow na thread da UI.
+        _visibleItems = _activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase)
+            ? _items
+            : _items
+                .Where(item => string.Equals(item.Category, _activeCategory, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+        DisposeRowImages();
+        _thumbnailLoaded.Clear();
+        _thumbnailLoading.Clear();
+        _thumbnailRetryAfter.Clear();
+
         _grid.BeginBatchUpdate();
-        _grid.SuspendLayout();
         try
         {
             _grid.CurrentCell = null;
-            foreach (DataGridViewRow row in _grid.Rows)
-            {
-                if (row.Tag is not CollectionMediaItem item)
-                    continue;
-
-                row.Visible = _activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase) ||
-                              string.Equals(item.Category, _activeCategory, StringComparison.OrdinalIgnoreCase);
-            }
+            _grid.RowCount = 0;
+            _grid.RowCount = _visibleItems.Count;
         }
         finally
         {
-            _grid.ResumeLayout(false);
             _grid.EndBatchUpdate();
         }
 
@@ -598,32 +622,21 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void ToggleRow(int rowIndex)
     {
-        if (rowIndex < 0 || rowIndex >= _grid.Rows.Count)
+        if (rowIndex < 0 || rowIndex >= _visibleItems.Count)
             return;
 
-        var row = _grid.Rows[rowIndex];
-        if (!row.Visible)
-            return;
+        var item = _visibleItems[rowIndex];
+        var key = SelectionKey(item);
+        if (!_selectedKeys.Remove(key))
+            _selectedKeys.Add(key);
 
-        var selected = Convert.ToBoolean(row.Cells[0].Value ?? false);
-        _suppressSelectionEvents = true;
-        try
-        {
-            row.Cells[0].Value = !selected;
-        }
-        finally
-        {
-            _suppressSelectionEvents = false;
-        }
-
-        UpdateRowVisual(row);
+        _grid.InvalidateRow(rowIndex);
         UpdateSummary();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private static void UpdateRowVisual(DataGridViewRow row)
+    private static void UpdateRowVisual(DataGridViewRow row, bool selected)
     {
-        var selected = Convert.ToBoolean(row.Cells[0].Value ?? false);
         var normal = selected ? Color.FromArgb(51, 40, 90) : Color.FromArgb(20, 20, 20);
         var focused = selected ? Color.FromArgb(65, 50, 115) : Color.FromArgb(34, 34, 34);
         row.DefaultCellStyle.BackColor = normal;
@@ -659,28 +672,32 @@ public sealed class ProfileSelectionPanel : UserControl
         var ct = _imageCts.Token;
         for (var i = start; i <= end; i++)
         {
-            if (i < 0 || i >= _grid.Rows.Count || !_grid.Rows[i].Visible)
+            if (i < 0 || i >= _visibleItems.Count)
                 continue;
             _ = LoadThumbnailForRowAsync(i, ct);
         }
 
         var loaded = _thumbnailLoaded.Count;
-        if (_items.Count > 0)
-            _loading.Text = loaded >= _items.Count
+        if (_visibleItems.Count > 0)
+            _loading.Text = loaded >= _visibleItems.Count
                 ? "Miniaturas prontas"
-                : $"Miniaturas: {loaded:N0}/{_items.Count:N0} (carregamento sob demanda)";
+                : $"Miniaturas: {loaded:N0}/{_visibleItems.Count:N0} (carregamento sob demanda)";
     }
 
     private async Task LoadThumbnailForRowAsync(int rowIndex, CancellationToken ct)
     {
-        if (_visualWorkPaused || rowIndex < 0 || rowIndex >= _items.Count) return;
+        if (_visualWorkPaused || rowIndex < 0 || rowIndex >= _visibleItems.Count) return;
+
+        var generation = _viewGeneration;
+        var item = _visibleItems[rowIndex];
+        var loadingKey = HashCode.Combine(generation, rowIndex);
+
         if (_thumbnailLoaded.ContainsKey(rowIndex)) return;
         if (_thumbnailRetryAfter.TryGetValue(rowIndex, out var retryAt) && retryAt > DateTime.UtcNow) return;
-        if (!_thumbnailLoading.TryAdd(rowIndex, 0)) return;
+        if (!_thumbnailLoading.TryAdd(loadingKey, 0)) return;
 
         try
         {
-            var item = _items[rowIndex];
             var candidates = ThumbnailCandidates(item);
             if (candidates.Count == 0)
                 return;
@@ -711,7 +728,14 @@ public sealed class ProfileSelectionPanel : UserControl
 
                 BeginInvoke(new Action(() =>
                 {
-                    if (IsDisposed || ct.IsCancellationRequested || rowIndex >= _grid.Rows.Count)
+                    if (IsDisposed ||
+                        ct.IsCancellationRequested ||
+                        generation != _viewGeneration ||
+                        rowIndex >= _visibleItems.Count ||
+                        !string.Equals(
+                            SelectionKey(_visibleItems[rowIndex]),
+                            SelectionKey(item),
+                            StringComparison.Ordinal))
                     {
                         image.Dispose();
                         return;
@@ -730,16 +754,16 @@ public sealed class ProfileSelectionPanel : UserControl
                     }
 
                     _rowImages[rowIndex] = image;
-                    _grid.Rows[rowIndex].Cells[1].Value = image;
+                    _grid.InvalidateCell(1, rowIndex);
                     _thumbnailRetryAfter.TryRemove(rowIndex, out _);
                     _thumbnailLoaded.TryAdd(rowIndex, 0);
 
                     var loaded = _thumbnailLoaded.Count;
-                    if (loaded == _items.Count || loaded % 8 == 0)
+                    if (loaded == _visibleItems.Count || loaded % 8 == 0)
                     {
-                        _loading.Text = loaded >= _items.Count
+                        _loading.Text = loaded >= _visibleItems.Count
                             ? "Miniaturas prontas"
-                            : $"Miniaturas: {loaded:N0}/{_items.Count:N0} (priorizando o que está na tela)";
+                            : $"Miniaturas: {loaded:N0}/{_visibleItems.Count:N0} (priorizando o que está na tela)";
                     }
                 }));
             }
@@ -756,7 +780,7 @@ public sealed class ProfileSelectionPanel : UserControl
         }
         finally
         {
-            _thumbnailLoading.TryRemove(rowIndex, out _);
+            _thumbnailLoading.TryRemove(loadingKey, out _);
         }
     }
 
@@ -1066,35 +1090,29 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void SetAll(bool value)
     {
-        _suppressSelectionEvents = true;
-        _grid.BeginBatchUpdate();
-        _grid.SuspendLayout();
-        try
+        var targetItems = _activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase)
+            ? _items
+            : _visibleItems;
+
+        foreach (var item in targetItems)
         {
-            foreach (DataGridViewRow row in _grid.Rows)
-            {
-                if (!row.Visible)
-                    continue;
-                row.Cells[0].Value = value;
-                UpdateRowVisual(row);
-            }
+            var key = SelectionKey(item);
+            if (value)
+                _selectedKeys.Add(key);
+            else
+                _selectedKeys.Remove(key);
         }
-        finally
-        {
-            _grid.ResumeLayout(false);
-            _grid.EndBatchUpdate();
-            _suppressSelectionEvents = false;
-        }
+
+        _grid.Invalidate();
         UpdateSummary();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void UpdateSummary()
     {
-        var rows = _grid.Rows.Cast<DataGridViewRow>().ToArray();
-        var selected = rows.Count(row => Convert.ToBoolean(row.Cells[0].Value ?? false));
-        var visible = rows.Count(row => row.Visible);
-        var selectedVisible = rows.Count(row => row.Visible && Convert.ToBoolean(row.Cells[0].Value ?? false));
+        var selected = _selectedKeys.Count;
+        var visible = _visibleItems.Count;
+        var selectedVisible = _visibleItems.Count(item => _selectedKeys.Contains(SelectionKey(item)));
 
         _summary.Text = _activeCategory.Equals("Todos", StringComparison.OrdinalIgnoreCase)
             ? $"Encontrados: {_items.Count:N0}   •   Selecionados: {selected:N0}"
@@ -1117,14 +1135,19 @@ public sealed class ProfileSelectionPanel : UserControl
             try { image.Dispose(); } catch { }
         }
         _loadedImages.Clear();
+        DisposeRowImages();
+    }
 
-        foreach (var pair in _rowImages)
+    private void DisposeRowImages()
+    {
+        foreach (var image in _rowImages.Values)
         {
-            if (pair.Key >= 0 && pair.Key < _grid.Rows.Count)
-                _grid.Rows[pair.Key].Cells[1].Value = null;
-            try { pair.Value.Dispose(); } catch { }
+            try { image.Dispose(); } catch { }
         }
         _rowImages.Clear();
+
+        if (_grid.RowCount > 0)
+            _grid.InvalidateColumn(1);
     }
 
     private bool IsRowNearViewport(int rowIndex, int extraRows)
@@ -1160,8 +1183,8 @@ public sealed class ProfileSelectionPanel : UserControl
             if (!_rowImages.Remove(index, out var image))
                 continue;
 
-            if (index >= 0 && index < _grid.Rows.Count)
-                _grid.Rows[index].Cells[1].Value = null;
+            if (index >= 0 && index < _grid.RowCount)
+                _grid.InvalidateCell(1, index);
 
             _thumbnailLoaded.TryRemove(index, out _);
             try { image.Dispose(); } catch { }
@@ -1179,6 +1202,9 @@ public sealed class ProfileSelectionPanel : UserControl
         }
         base.Dispose(disposing);
     }
+
+    private static string SelectionKey(CollectionMediaItem item)
+        => $"{item.Index}|{item.Id}|{item.Url}";
 
     private static string CompactText(string text, int maxLength)
     {
