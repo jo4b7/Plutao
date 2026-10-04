@@ -2986,6 +2986,9 @@ public sealed class YtDlpRunner
         var tempPath = Path.Combine(
             directory,
             $".{Path.GetFileNameWithoutExtension(path)}.plutao-compatible-{Guid.NewGuid():N}.mp4");
+        var backupPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(path)}.plutao-backup-{Guid.NewGuid():N}");
 
         async Task<(bool Success, string Error)> ConvertAsync(bool useAmdAmf)
         {
@@ -3139,31 +3142,63 @@ public sealed class YtDlpRunner
                 throw new InvalidOperationException(
                     $"Verificação do arquivo convertido falhou: vídeo={EmptyAsUnknown(tempVideoCodec)}, áudio={EmptyAsUnknown(tempAudioCodec)}.");
 
-            // O original só é substituído depois que o temporário passou no ffprobe.
-            File.Move(tempPath, path, true);
-
-            var finalVideoCodec = await ProbeCodecAsync(path, "v:0", ct);
-            var finalAudioCodec = await ProbeCodecAsync(path, "a:0", ct);
-            var (finalWidth, finalHeight) = await ProbeDimensionsAsync(path, ct);
-            var finalResolution = finalWidth > 0 && finalHeight > 0 ? Math.Min(finalWidth, finalHeight) : finalHeight;
-            var finalTargetHevc = (finalResolution > 0 ? finalResolution : effectiveHeight) > 1080;
-            var finalVideoOk = finalTargetHevc
-                ? string.Equals(finalVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
-                  string.Equals(finalVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
-                : string.Equals(finalVideoCodec, "h264", StringComparison.OrdinalIgnoreCase);
-            var finalAudioOk = string.IsNullOrWhiteSpace(finalAudioCodec) ||
-                               string.Equals(finalAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
-
-            if (!finalVideoOk || !finalAudioOk)
+            // O temporário já passou no ffprobe. Ainda assim, preserva o
+            // original até a validação do arquivo colocado no caminho final.
+            var backupCreated = false;
+            try
             {
-                LastCompletedFilePath = null;
-                throw new InvalidOperationException(
-                    $"Verificação final falhou: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}.");
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
+
+                File.Move(path, backupPath, false);
+                backupCreated = true;
+                File.Move(tempPath, path, false);
+
+                var finalVideoCodec = await ProbeCodecAsync(path, "v:0", ct);
+                var finalAudioCodec = await ProbeCodecAsync(path, "a:0", ct);
+                var (finalWidth, finalHeight) = await ProbeDimensionsAsync(path, ct);
+                var finalResolution = finalWidth > 0 && finalHeight > 0 ? Math.Min(finalWidth, finalHeight) : finalHeight;
+                var finalTargetHevc = (finalResolution > 0 ? finalResolution : effectiveHeight) > 1080;
+                var finalVideoOk = finalTargetHevc
+                    ? string.Equals(finalVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(finalVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(finalVideoCodec, "h264", StringComparison.OrdinalIgnoreCase);
+                var finalAudioOk = string.IsNullOrWhiteSpace(finalAudioCodec) ||
+                                   string.Equals(finalAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
+
+                if (!finalVideoOk || !finalAudioOk)
+                    throw new InvalidOperationException(
+                        $"Verificação final falhou: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}.");
+
+                _currentCompletedFilePath = path;
+                log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, resolução={(finalResolution > 0 ? finalResolution + "p" : "desconhecida")}.");
+
+                if (backupCreated && File.Exists(backupPath))
+                    File.Delete(backupPath);
+                backupCreated = false;
+            }
+            catch
+            {
+                if (backupCreated && File.Exists(backupPath))
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                            File.Delete(path);
+                        File.Move(backupPath, path, true);
+                        backupCreated = false;
+                    }
+                    catch (Exception restoreEx)
+                    {
+                        throw new InvalidOperationException(
+                            $"A conversão falhou e o Plutao não conseguiu restaurar automaticamente o arquivo original. Backup preservado em: {backupPath}",
+                            restoreEx);
+                    }
+                }
+
+                throw;
             }
 
-            _currentCompletedFilePath = path;
-            LastCompletedFilePath = path;
-            log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, resolução={(finalResolution > 0 ? finalResolution + "p" : "desconhecida")}.");
             if (targetHevc && !videoCompatible)
                 log.Report(usedAmdAmf
                     ? "[Compatibilidade] HEVC codificado pela GPU AMD (AMF)."
@@ -3176,6 +3211,8 @@ public sealed class YtDlpRunner
             {
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
+                if (File.Exists(backupPath) && File.Exists(path))
+                    File.Delete(backupPath);
             }
             catch { }
         }
