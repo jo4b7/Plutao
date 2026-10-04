@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.10
+
+- Miniaturas fora da área próxima da tela são liberadas para reduzir uso de memória em canais com milhares de vídeos.
+- Filtros por categoria e ações de selecionar/limpar milhares de itens usam atualização em lote para evitar cintilação e travamentos.
+- O DataGridView mantém double buffering, mas preserva o desenho nativo para evitar regressões visuais.
+- A lista de URLs de miniaturas com falha passa a ter limite e limpeza automática.
+- Downloads verificam se as pastas de destino e temporários são realmente graváveis antes de iniciar.
+- Downloads de componentes validam o tamanho esperado quando o servidor informa Content-Length.
+- yt-dlp, Deno e gallery-dl executam `--version` antes de substituir a instalação anterior.
+- FFmpeg e ffprobe executam `-version` antes de substituir a instalação anterior.
+- Versão e User-Agent internos atualizados para 0.5.10.
+
 ## 0.5.9
 
 - Revisão ampla de estabilidade e desempenho sobre a v0.5.8.
