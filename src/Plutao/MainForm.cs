@@ -903,7 +903,7 @@ public sealed class MainForm : Form
 
         foreach (Control child in control.Controls)
         {
-            if (child is Panel or TableLayoutPanel or UserControl or GroupBox)
+            if (child is System.Windows.Forms.Panel or TableLayoutPanel or UserControl or GroupBox)
                 EnableDoubleBuffering(child);
         }
     }
