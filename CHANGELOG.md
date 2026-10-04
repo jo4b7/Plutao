@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.11
+
+- Corrige a lista de vídeos que podia ficar com apenas uma linha visível mesmo em tela maximizada.
+- A altura do painel de resultados deixa de depender da altura atual do controle interno com `Dock=Fill`, eliminando o ciclo de encolhimento.
+- O painel de resultados e o Diagnóstico passam a usar uma altura-alvo própria calculada pelo espaço vertical realmente livre da janela.
+- Maximizar/restaurar recalcula a altura disponível sem perder largura nem deixar um grande espaço preto desnecessário.
+- Em monitores grandes, a lista aproveita mais espaço vertical; em janelas menores, mantém altura mínima e usa rolagem normalmente.
+- Versão e User-Agent internos atualizados para 0.5.11.
+
 ## 0.5.10
 
 - Miniaturas fora da área próxima da tela são liberadas para reduzir uso de memória em canais com milhares de vídeos.
