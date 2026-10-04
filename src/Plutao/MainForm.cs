@@ -1338,11 +1338,11 @@ public sealed class MainForm : Form
             profileSelection.SetVisualWorkPaused(true);
             var stateChanged = WindowState != _lastWindowState;
             _lastWindowState = WindowState;
+            CancelUiAnimationsForResize();
 
             _layoutTimer.Stop();
             if (stateChanged)
             {
-                CancelUiAnimationsForResize();
                 BeginInvoke(new Action(() =>
                 {
                     ApplyResponsiveSpacing();
