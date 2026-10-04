@@ -22,6 +22,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private ProfileInfo? _profile;
     private CancellationTokenSource? _imageCts;
     private readonly List<Image> _loadedImages = new();
+    private readonly Dictionary<int, Image> _rowImages = new();
     private readonly ConcurrentDictionary<int, byte> _thumbnailLoaded = new();
     private readonly ConcurrentDictionary<int, byte> _thumbnailLoading = new();
     private readonly ConcurrentDictionary<int, DateTime> _thumbnailRetryAfter = new();
@@ -138,6 +139,7 @@ public sealed class ProfileSelectionPanel : UserControl
         _activeCategory = "Todos";
         _suppressSelectionEvents = true;
 
+        _grid.BeginBatchUpdate();
         _grid.SuspendLayout();
         try
         {
@@ -149,6 +151,7 @@ public sealed class ProfileSelectionPanel : UserControl
         finally
         {
             _grid.ResumeLayout(false);
+            _grid.EndBatchUpdate();
         }
 
         _suppressSelectionEvents = false;
@@ -547,6 +550,7 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void ApplyCategoryFilter()
     {
+        _grid.BeginBatchUpdate();
         _grid.SuspendLayout();
         try
         {
@@ -563,6 +567,7 @@ public sealed class ProfileSelectionPanel : UserControl
         finally
         {
             _grid.ResumeLayout(false);
+            _grid.EndBatchUpdate();
         }
 
         UpdateCategoryButtonStyles();
@@ -649,6 +654,8 @@ public sealed class ProfileSelectionPanel : UserControl
         var ahead = immediate ? 36 : 24;
         var end = Math.Min(_grid.Rows.Count - 1, first + displayed + ahead);
 
+        TrimRowImages(start, end);
+
         var ct = _imageCts.Token;
         for (var i = start; i <= end; i++)
         {
@@ -710,7 +717,19 @@ public sealed class ProfileSelectionPanel : UserControl
                         return;
                     }
 
-                    _loadedImages.Add(image);
+                    if (!IsRowNearViewport(rowIndex, 72))
+                    {
+                        image.Dispose();
+                        return;
+                    }
+
+                    if (_rowImages.TryGetValue(rowIndex, out var oldImage))
+                    {
+                        _grid.Rows[rowIndex].Cells[1].Value = null;
+                        try { oldImage.Dispose(); } catch { }
+                    }
+
+                    _rowImages[rowIndex] = image;
                     _grid.Rows[rowIndex].Cells[1].Value = image;
                     _thumbnailRetryAfter.TryRemove(rowIndex, out _);
                     _thumbnailLoaded.TryAdd(rowIndex, 0);
@@ -1026,6 +1045,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private void SetAll(bool value)
     {
         _suppressSelectionEvents = true;
+        _grid.BeginBatchUpdate();
         _grid.SuspendLayout();
         try
         {
@@ -1040,6 +1060,7 @@ public sealed class ProfileSelectionPanel : UserControl
         finally
         {
             _grid.ResumeLayout(false);
+            _grid.EndBatchUpdate();
             _suppressSelectionEvents = false;
         }
         UpdateSummary();
@@ -1074,6 +1095,55 @@ public sealed class ProfileSelectionPanel : UserControl
             try { image.Dispose(); } catch { }
         }
         _loadedImages.Clear();
+
+        foreach (var pair in _rowImages)
+        {
+            if (pair.Key >= 0 && pair.Key < _grid.Rows.Count)
+                _grid.Rows[pair.Key].Cells[1].Value = null;
+            try { pair.Value.Dispose(); } catch { }
+        }
+        _rowImages.Clear();
+    }
+
+    private bool IsRowNearViewport(int rowIndex, int extraRows)
+    {
+        if (rowIndex < 0 || rowIndex >= _grid.Rows.Count)
+            return false;
+
+        int first;
+        try { first = _grid.FirstDisplayedScrollingRowIndex; }
+        catch { first = -1; }
+        if (first < 0) first = 0;
+
+        var displayed = Math.Max(8, _grid.DisplayedRowCount(true));
+        var min = Math.Max(0, first - extraRows);
+        var max = Math.Min(_grid.Rows.Count - 1, first + displayed + extraRows);
+        return rowIndex >= min && rowIndex <= max;
+    }
+
+    private void TrimRowImages(int visibleStart, int visibleEnd)
+    {
+        if (_rowImages.Count <= 160)
+            return;
+
+        var keepStart = Math.Max(0, visibleStart - 64);
+        var keepEnd = Math.Min(_grid.Rows.Count - 1, visibleEnd + 64);
+        var toRemove = _rowImages.Keys
+            .Where(index => index < keepStart || index > keepEnd)
+            .Take(Math.Max(1, _rowImages.Count - 128))
+            .ToArray();
+
+        foreach (var index in toRemove)
+        {
+            if (!_rowImages.Remove(index, out var image))
+                continue;
+
+            if (index >= 0 && index < _grid.Rows.Count)
+                _grid.Rows[index].Cells[1].Value = null;
+
+            _thumbnailLoaded.TryRemove(index, out _);
+            try { image.Dispose(); } catch { }
+        }
     }
 
     protected override void Dispose(bool disposing)
