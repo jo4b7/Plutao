@@ -2272,9 +2272,14 @@ public sealed class MainForm : Form
 
     private void AppendLog(string text)
     {
+        if (IsDisposed || Disposing)
+            return;
+
         if (InvokeRequired)
         {
-            BeginInvoke(() => AppendLog(text));
+            if (!IsHandleCreated)
+                return;
+            try { BeginInvoke(() => AppendLog(text)); } catch (InvalidOperationException) { }
             return;
         }
 
@@ -2301,9 +2306,14 @@ public sealed class MainForm : Form
 
     private void SetProgressUi(DownloadProgressInfo info)
     {
+        if (IsDisposed || Disposing)
+            return;
+
         if (InvokeRequired)
         {
-            BeginInvoke(() => SetProgressUi(info));
+            if (!IsHandleCreated)
+                return;
+            try { BeginInvoke(() => SetProgressUi(info)); } catch (InvalidOperationException) { }
             return;
         }
 
