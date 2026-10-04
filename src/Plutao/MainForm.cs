@@ -85,6 +85,8 @@ public sealed class MainForm : Form
     private readonly Label lblAudioFormatCaption = new() { Text = "Formato", AutoSize = true };
     private readonly System.Windows.Forms.Timer _previewTimer = new() { Interval = 700 };
     private readonly System.Windows.Forms.Timer _layoutTimer = new() { Interval = 80 };
+    private readonly List<string> _previewThumbnailCandidates = new();
+    private int _previewThumbnailIndex;
     private CancellationTokenSource? _previewCts;
     private Task? _previewTask;
 
@@ -100,6 +102,7 @@ public sealed class MainForm : Form
     private int _drawerAnimationGeneration;
     private int _workspaceAnimationGeneration;
     private FormWindowState _lastWindowState = FormWindowState.Normal;
+    private bool _analyzingCollection;
     private bool _busy;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
@@ -187,7 +190,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.8",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.9",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -421,7 +424,7 @@ public sealed class MainForm : Form
         grpLog.Controls.Add(txtLog);
 
         profileWorkspace.Name = "profileWorkspace";
-        profileWorkspace.Dock = DockStyle.Fill;
+        profileWorkspace.Dock = DockStyle.Top;
         profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         profileWorkspace.AutoSize = false;
         profileWorkspace.Height = 520;
@@ -668,6 +671,7 @@ public sealed class MainForm : Form
         _drawerAnimating = true;
         _advancedVisible = visible;
         btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
+        profileSelection.SetVisualWorkPaused(true);
 
         try
         {
@@ -688,7 +692,7 @@ public sealed class MainForm : Form
             }
 
             var timer = Stopwatch.StartNew();
-            const double durationMs = 145d;
+            const double durationMs = 140d;
             while (timer.Elapsed.TotalMilliseconds < durationMs &&
                    !IsDisposed &&
                    generation == _drawerAnimationGeneration)
@@ -698,6 +702,7 @@ public sealed class MainForm : Form
                 var nextLeft = (int)Math.Round(startLeft + ((endLeft - startLeft) * eased));
                 if (settingsDrawer.Left != nextLeft)
                     settingsDrawer.Left = nextLeft;
+
                 await Task.Delay(16);
             }
 
@@ -711,7 +716,10 @@ public sealed class MainForm : Form
         finally
         {
             if (generation == _drawerAnimationGeneration)
+            {
                 _drawerAnimating = false;
+                profileSelection.SetVisualWorkPaused(false);
+            }
         }
     }
 
@@ -787,6 +795,8 @@ public sealed class MainForm : Form
 
         var generation = ++_workspaceAnimationGeneration;
         _workspaceAnimating = true;
+        profileSelection.SetVisualWorkPaused(true);
+
         try
         {
             var profileVisible = _resultsVisible && profileSelection.HasData;
@@ -797,23 +807,72 @@ public sealed class MainForm : Form
             profileSelection.Visible = profileVisible;
             grpLog.Visible = _logVisible;
 
-            // Com milhares de linhas, animar o DataGridView quadro a quadro custa caro.
-            // Nesses casos usa uma transição curta e aplica o layout final de uma vez.
-            var largeCollection = profileSelection.TotalItems > 800;
+            // DataGridView grande custa muito para relayout a cada quadro.
+            // Nesses casos a transição anima apenas o contêiner vazio e revela
+            // a grade no final: mantém movimento suave sem redesenhar 4 mil linhas.
+            var largeCollection = profileSelection.TotalItems > 300;
             if (largeCollection)
             {
-                if (shouldShow)
+                if (shouldShow && !wasVisible)
                 {
+                    profileSelection.Visible = false;
+                    grpLog.Visible = false;
+                    ConfigureWorkspaceColumns(profileVisible);
+                    profileWorkspace.Height = 1;
                     profileWorkspace.Visible = true;
-                    profileWorkspace.Height = targetHeight;
+
+                    var timer = Stopwatch.StartNew();
+                    const double durationMs = 135d;
+                    while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                           !IsDisposed &&
+                           generation == _workspaceAnimationGeneration)
+                    {
+                        var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                        var eased = 1d - Math.Pow(1d - t, 3d);
+                        profileWorkspace.Height = Math.Max(1, (int)Math.Round(targetHeight * eased));
+                        await Task.Delay(16);
+                    }
+
+                    if (!IsDisposed && generation == _workspaceAnimationGeneration)
+                    {
+                        profileWorkspace.Height = targetHeight;
+                        profileSelection.Visible = profileVisible;
+                        grpLog.Visible = _logVisible;
+                        ConfigureWorkspaceColumns(profileVisible);
+                    }
+                }
+                else if (!shouldShow && wasVisible)
+                {
+                    profileSelection.Visible = false;
+                    grpLog.Visible = false;
+                    var startHeight = Math.Max(1, profileWorkspace.Height);
+                    var timer = Stopwatch.StartNew();
+                    const double durationMs = 110d;
+                    while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                           !IsDisposed &&
+                           generation == _workspaceAnimationGeneration)
+                    {
+                        var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                        profileWorkspace.Height = Math.Max(1, (int)Math.Round(startHeight * (1d - (t * t))));
+                        await Task.Delay(16);
+                    }
+
+                    if (!IsDisposed && generation == _workspaceAnimationGeneration)
+                    {
+                        profileWorkspace.Visible = false;
+                        profileWorkspace.Height = targetHeight;
+                    }
                 }
                 else
                 {
-                    profileWorkspace.Visible = false;
+                    profileWorkspace.Visible = shouldShow;
+                    if (shouldShow)
+                        profileWorkspace.Height = targetHeight;
+                    profileSelection.Visible = profileVisible;
+                    grpLog.Visible = _logVisible;
+                    ConfigureWorkspaceColumns(profileVisible);
                 }
 
-                ConfigureWorkspaceColumns(profileVisible);
-                profileWorkspace.PerformLayout();
                 return;
             }
 
@@ -824,7 +883,7 @@ public sealed class MainForm : Form
                 profileWorkspace.Visible = true;
 
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 135d;
+                const double durationMs = 125d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
                        generation == _workspaceAnimationGeneration)
@@ -842,7 +901,7 @@ public sealed class MainForm : Form
             {
                 var startHeight = Math.Max(1, profileWorkspace.Height);
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 120d;
+                const double durationMs = 115d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
                        generation == _workspaceAnimationGeneration)
@@ -884,7 +943,7 @@ public sealed class MainForm : Form
 
                 grpLog.Visible = _logVisible;
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 130d;
+                const double durationMs = 120d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
                        generation == _workspaceAnimationGeneration)
@@ -906,7 +965,10 @@ public sealed class MainForm : Form
         finally
         {
             if (generation == _workspaceAnimationGeneration)
+            {
                 _workspaceAnimating = false;
+                profileSelection.SetVisualWorkPaused(false);
+            }
         }
     }
 
@@ -922,9 +984,6 @@ public sealed class MainForm : Form
             settingsDrawer.Visible = true;
             settingsDrawer.BringToFront();
         }
-
-        UpdateWorkspaceLayout();
-        PositionSettingsDrawer();
     }
 
     private int SettingsDrawerWidth()
@@ -980,7 +1039,7 @@ public sealed class MainForm : Form
         SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
         profileSelection.ApplyResponsiveHeight(compact, roomy);
         profileWorkspace.Height = profileSelection.Height;
-        profileWorkspace.Dock = DockStyle.Fill;
+        profileWorkspace.Dock = DockStyle.Top;
         profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         profileSelection.Dock = DockStyle.Fill;
         grpLog.Dock = DockStyle.Fill;
@@ -1001,7 +1060,9 @@ public sealed class MainForm : Form
                     (host is System.Windows.Forms.Panel panel && panel.VerticalScroll.Visible
                         ? SystemInformation.VerticalScrollBarWidth
                         : 0));
+                layout.Width = availableWidth;
                 layout.MinimumSize = new Size(availableWidth, 0);
+                layout.MaximumSize = new Size(availableWidth, 0);
             }
 
             foreach (Control child in layout.Controls)
@@ -1109,6 +1170,7 @@ public sealed class MainForm : Form
         cmbVideoFormat.SelectedIndexChanged += (_, _) => UpdateModeUi();
         chkPlaylist.CheckedChanged += (_, _) =>
         {
+            CancelCollectionAnalysisForChangedInput();
             UpdateModeUi();
             if (!chkPlaylist.Checked)
             {
@@ -1121,11 +1183,13 @@ public sealed class MainForm : Form
         };
         cmbCollectionLimit.SelectedIndexChanged += (_, _) =>
         {
+            CancelCollectionAnalysisForChangedInput();
             ResetCollectionSelection();
             RestartPreviewAnalysis();
         };
         cmbCookies.SelectedIndexChanged += (_, _) =>
         {
+            CancelCollectionAnalysisForChangedInput();
             ResetCollectionSelection();
             RestartPreviewAnalysis();
         };
@@ -1230,17 +1294,28 @@ public sealed class MainForm : Form
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
         picPreview.LoadCompleted += (_, e) =>
         {
-            if (e.Error is null)
+            if (e.Cancelled || e.Error is null)
                 return;
 
-            picPreview.ImageLocation = null;
-            picPreview.Visible = false;
+            var failedUrl = picPreview.ImageLocation ?? string.Empty;
+            if (_previewThumbnailIndex < _previewThumbnailCandidates.Count &&
+                !string.Equals(
+                    failedUrl,
+                    _previewThumbnailCandidates[_previewThumbnailIndex],
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _previewThumbnailIndex++;
+            StartNextPreviewThumbnail();
         };
 
         _layoutTimer.Tick += (_, _) =>
         {
             _layoutTimer.Stop();
             ApplyResponsiveSpacing();
+            profileSelection.SetVisualWorkPaused(false);
         };
 
         Shown += (_, _) =>
@@ -1253,12 +1328,14 @@ public sealed class MainForm : Form
         {
             CancelUiAnimationsForResize();
             ApplyResponsiveSpacing();
+            profileSelection.SetVisualWorkPaused(false);
         }));
         Resize += (_, _) =>
         {
             if (WindowState == FormWindowState.Minimized)
                 return;
 
+            profileSelection.SetVisualWorkPaused(true);
             var stateChanged = WindowState != _lastWindowState;
             _lastWindowState = WindowState;
             CancelUiAnimationsForResize();
@@ -1266,7 +1343,11 @@ public sealed class MainForm : Form
             _layoutTimer.Stop();
             if (stateChanged)
             {
-                BeginInvoke(new Action(ApplyResponsiveSpacing));
+                BeginInvoke(new Action(() =>
+                {
+                    ApplyResponsiveSpacing();
+                    profileSelection.SetVisualWorkPaused(false);
+                }));
             }
             else
             {
@@ -1278,6 +1359,7 @@ public sealed class MainForm : Form
             _layoutTimer.Stop();
             CancelUiAnimationsForResize();
             ApplyResponsiveSpacing();
+            profileSelection.SetVisualWorkPaused(false);
         };
         FormClosing += (_, _) =>
         {
@@ -1298,6 +1380,7 @@ public sealed class MainForm : Form
 
     private void OnUrlsChanged()
     {
+        CancelCollectionAnalysisForChangedInput();
         ResetCollectionSelection();
         ResetQualityChoices();
         CancelPreview();
@@ -1318,12 +1401,41 @@ public sealed class MainForm : Form
             _previewTimer.Start();
     }
 
+    private void CancelCollectionAnalysisForChangedInput()
+    {
+        if (!_analyzingCollection)
+            return;
+
+        try { _cts?.Cancel(); } catch { }
+        _runner.Stop();
+    }
+
     private void CancelPreview()
     {
         _previewTimer.Stop();
-        try { _previewCts?.Cancel(); } catch { }
-        _previewCts?.Dispose();
+        try { picPreview.CancelAsync(); } catch { }
+        _previewThumbnailCandidates.Clear();
+        _previewThumbnailIndex = 0;
+
+        var cts = _previewCts;
         _previewCts = null;
+        if (cts is null)
+            return;
+
+        try { cts.Cancel(); } catch { }
+
+        var runningTask = _previewTask;
+        if (runningTask is null || runningTask.IsCompleted)
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _ = runningTask.ContinueWith(
+            _ => cts.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task StopPreviewBeforeRunnerUseAsync()
@@ -1414,15 +1526,21 @@ public sealed class MainForm : Form
 
         try
         {
-            var preview = await _runner.AnalyzeMediaAsync(
-                url,
-                cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(info =>
-                {
-                    if (!string.IsNullOrWhiteSpace(info.Stage) && info.Percent < 100)
-                        lblPreviewMeta.Text = info.Stage + "...";
-                }),
+            var previewCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum";
+            var previewLog = LogProgress();
+            var previewProgress = new Progress<DownloadProgressInfo>(info =>
+            {
+                if (!string.IsNullOrWhiteSpace(info.Stage) && info.Percent < 100)
+                    lblPreviewMeta.Text = info.Stage + "...";
+            });
+
+            var preview = await Task.Run(
+                () => _runner.AnalyzeMediaAsync(
+                    url,
+                    previewCookies,
+                    previewLog,
+                    previewProgress,
+                    ct),
                 ct);
 
             if (preview is null || ct.IsCancellationRequested || IsDisposed)
@@ -1464,28 +1582,57 @@ public sealed class MainForm : Form
         lblPreviewDetails.Text = string.Join("  •  ", details);
         ApplyAvailableQualities(preview);
 
-        var thumbnailUrl = preview.ThumbnailUrl;
+        try { picPreview.CancelAsync(); } catch { }
+        _previewThumbnailCandidates.Clear();
+        _previewThumbnailIndex = 0;
+
+        void AddCandidate(string? candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                return;
+            if (!_previewThumbnailCandidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                _previewThumbnailCandidates.Add(candidate);
+        }
+
+        AddCandidate(preview.ThumbnailUrl);
         if (preview.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(preview.Id))
         {
-            thumbnailUrl = $"https://i.ytimg.com/vi/{preview.Id}/hqdefault.jpg";
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/hqdefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/mqdefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/sddefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/maxresdefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/0.jpg");
         }
 
-        if (!string.IsNullOrWhiteSpace(thumbnailUrl))
+        StartNextPreviewThumbnail();
+    }
+
+    private void StartNextPreviewThumbnail()
+    {
+        if (IsDisposed)
+            return;
+
+        if (_previewThumbnailIndex < 0 ||
+            _previewThumbnailIndex >= _previewThumbnailCandidates.Count)
         {
-            try
-            {
-                picPreview.ErrorImage = null;
-                picPreview.InitialImage = null;
-                picPreview.Visible = true;
-                picPreview.ImageLocation = thumbnailUrl;
-                picPreview.LoadAsync();
-            }
-            catch
-            {
-                picPreview.ImageLocation = null;
-                picPreview.Visible = false;
-            }
+            picPreview.ImageLocation = null;
+            picPreview.Visible = false;
+            return;
+        }
+
+        try
+        {
+            picPreview.ErrorImage = null;
+            picPreview.InitialImage = null;
+            picPreview.Visible = true;
+            picPreview.ImageLocation = _previewThumbnailCandidates[_previewThumbnailIndex];
+            picPreview.LoadAsync();
+        }
+        catch
+        {
+            _previewThumbnailIndex++;
+            StartNextPreviewThumbnail();
         }
     }
 
@@ -1781,6 +1928,7 @@ public sealed class MainForm : Form
         await StopPreviewBeforeRunnerUseAsync();
         _tools.TemporaryDirectory = txtTemp.Text.Trim();
         _cts = new CancellationTokenSource();
+        _analyzingCollection = true;
         SetBusy(true);
         btnAnalyzeCollection.Visible = false;
         lblCollectionInfo.Visible = true;
@@ -1792,13 +1940,18 @@ public sealed class MainForm : Form
 
         try
         {
-            var items = await _runner.AnalyzeCollectionAsync(
-                targetUrl,
-                analysisCookies,
-                analysisLimit,
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(SetProgressUi),
-                _cts.Token);
+            var analysisToken = _cts.Token;
+            var analysisLog = LogProgress();
+            var analysisProgress = new Progress<DownloadProgressInfo>(SetProgressUi);
+            var items = await Task.Run(
+                () => _runner.AnalyzeCollectionAsync(
+                    targetUrl,
+                    analysisCookies,
+                    analysisLimit,
+                    analysisLog,
+                    analysisProgress,
+                    analysisToken),
+                analysisToken);
 
             if (items.Count == 0)
             {
@@ -1867,6 +2020,7 @@ public sealed class MainForm : Form
         }
         finally
         {
+            _analyzingCollection = false;
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
@@ -1885,7 +2039,11 @@ public sealed class MainForm : Form
         }
 
         var sameAnalyzedProfile = chkPlaylist.Checked && urls.Count == 1 &&
-                                  string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal) &&
+                                  !string.IsNullOrWhiteSpace(_analyzedCollectionUrl) &&
+                                  string.Equals(
+                                      AppCache.NormalizeUrl(urls[0]),
+                                      AppCache.NormalizeUrl(_analyzedCollectionUrl),
+                                      StringComparison.OrdinalIgnoreCase) &&
                                   profileSelection.HasData;
 
         if (sameAnalyzedProfile && profileSelection.SelectedItems.Count == 0)
@@ -1940,7 +2098,7 @@ public sealed class MainForm : Form
         _tools.TemporaryDirectory = options.TemporaryDirectory;
         _cts = new CancellationTokenSource();
         SetBusy(true);
-        SetProgressUi(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando"));
+        SetProgressUi(new DownloadProgressInfo(0, downloadUrls.Count, 0, "", "", "", "Preparando"));
         AppendLog($"Iniciando {downloadUrls.Count} link(s)...");
         if (downloadUrls.Count == 1 && YtDlpRunner.IsLikelySingleMediaUrl(downloadUrls[0]))
             AppendLog("Detecção automática: mídia individual; o modo de página/playlist será ignorado para acelerar o início.");
@@ -1961,12 +2119,17 @@ public sealed class MainForm : Form
 
         try
         {
-            var code = await _runner.DownloadAsync(
-                downloadUrls,
-                options,
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(SetProgressUi),
-                _cts.Token);
+            var downloadToken = _cts.Token;
+            var downloadLog = LogProgress();
+            var downloadProgress = new Progress<DownloadProgressInfo>(SetProgressUi);
+            var code = await Task.Run(
+                () => _runner.DownloadAsync(
+                    downloadUrls,
+                    options,
+                    downloadLog,
+                    downloadProgress,
+                    downloadToken),
+                downloadToken);
 
             if (code == 0)
             {
@@ -2009,6 +2172,7 @@ public sealed class MainForm : Form
             _cts?.Dispose();
             _cts = null;
             _activeOutputDirectory = null;
+            RestartPreviewAnalysis();
         }
     }
 
@@ -2088,15 +2252,17 @@ public sealed class MainForm : Form
             SetBusy(true);
             lblStatus.Text = "Atualizando...";
             lblStatus.ForeColor = TextMuted;
-            lblCurrent.Text = "Atualizando yt-dlp, FFmpeg e Deno...";
+            lblCurrent.Text = "Atualizando yt-dlp, FFmpeg, Deno e gallery-dl...";
             _cts = new CancellationTokenSource();
-            await _tools.UpdateAllAsync(
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(SetProgressUi),
-                _cts.Token);
+            var updateToken = _cts.Token;
+            var updateLog = LogProgress();
+            var updateProgress = new Progress<DownloadProgressInfo>(SetProgressUi);
+            await Task.Run(
+                () => _tools.UpdateAllAsync(updateLog, updateProgress, updateToken),
+                updateToken);
             lblStatus.Text = "Componentes prontos";
             lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
-            lblCurrent.Text = "yt-dlp, FFmpeg e Deno estão prontos.";
+            lblCurrent.Text = "yt-dlp, FFmpeg, Deno e gallery-dl estão prontos.";
         }
         catch (OperationCanceledException)
         {
@@ -2117,6 +2283,7 @@ public sealed class MainForm : Form
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
+            RestartPreviewAnalysis();
         }
     }
 
@@ -2124,22 +2291,48 @@ public sealed class MainForm : Form
 
     private void AppendLog(string text)
     {
+        if (IsDisposed || Disposing)
+            return;
+
         if (InvokeRequired)
         {
-            BeginInvoke(() => AppendLog(text));
+            if (!IsHandleCreated)
+                return;
+            try { BeginInvoke(() => AppendLog(text)); } catch (InvalidOperationException) { }
             return;
+        }
+
+        const int maxLogChars = 900_000;
+        const int trimLogChars = 180_000;
+
+        if (txtLog.TextLength > maxLogChars)
+        {
+            var cut = Math.Min(trimLogChars, txtLog.TextLength);
+            var current = txtLog.Text;
+            var lineEnd = current.IndexOf('\n', cut);
+            if (lineEnd >= 0)
+                cut = lineEnd + 1;
+
+            txtLog.Select(0, cut);
+            txtLog.SelectedText = string.Empty;
         }
 
         txtLog.AppendText(text + Environment.NewLine);
         txtLog.SelectionStart = txtLog.TextLength;
-        txtLog.ScrollToCaret();
+        if (_logVisible)
+            txtLog.ScrollToCaret();
     }
 
     private void SetProgressUi(DownloadProgressInfo info)
     {
+        if (IsDisposed || Disposing)
+            return;
+
         if (InvokeRequired)
         {
-            BeginInvoke(() => SetProgressUi(info));
+            if (!IsHandleCreated)
+                return;
+            try { BeginInvoke(() => SetProgressUi(info)); } catch (InvalidOperationException) { }
             return;
         }
 

@@ -13,6 +13,7 @@ public sealed class ProfileSelectionPanel : UserControl
     private static readonly string RenderedCacheDirectory = AppCache.RenderedThumbnailDirectory;
     private static readonly ConcurrentDictionary<string, byte[]> MemoryCache = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, byte[]> RenderedMemoryCache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, DateTime> FailedImageUntil = new(StringComparer.Ordinal);
     private const int MaxMemoryCacheEntries = 512;
     private static readonly HttpClient Http = CreateHttpClient();
     private static int _cacheWrites;
@@ -23,9 +24,11 @@ public sealed class ProfileSelectionPanel : UserControl
     private readonly List<Image> _loadedImages = new();
     private readonly ConcurrentDictionary<int, byte> _thumbnailLoaded = new();
     private readonly ConcurrentDictionary<int, byte> _thumbnailLoading = new();
-    private readonly SemaphoreSlim _thumbnailGate = new(12, 12);
+    private readonly ConcurrentDictionary<int, DateTime> _thumbnailRetryAfter = new();
+    private readonly SemaphoreSlim _thumbnailGate = new(6, 6);
     private readonly System.Windows.Forms.Timer _thumbnailTimer = new() { Interval = 70 };
     private bool _suppressSelectionEvents;
+    private bool _visualWorkPaused;
     private int _currentRowHeight = 92;
     private string _activeCategory = "Todos";
     private readonly Dictionary<string, Button> _categoryButtons = new(StringComparer.OrdinalIgnoreCase);
@@ -86,6 +89,22 @@ public sealed class ProfileSelectionPanel : UserControl
     public bool HasData => _items.Count > 0;
     public int TotalItems => _items.Count;
 
+    public void SetVisualWorkPaused(bool paused)
+    {
+        _visualWorkPaused = paused;
+        if (paused)
+        {
+            _thumbnailTimer.Stop();
+            return;
+        }
+
+        if (Visible && _items.Count > 0 && !IsDisposed && IsHandleCreated)
+        {
+            try { BeginInvoke(new Action(() => QueueVisibleThumbnails(immediate: false))); }
+            catch (InvalidOperationException) { }
+        }
+    }
+
     public IReadOnlyList<CollectionMediaItem> SelectedItems
         => _grid.Rows.Cast<DataGridViewRow>()
             .Where(row => Convert.ToBoolean(row.Cells[0].Value ?? false))
@@ -112,6 +131,7 @@ public sealed class ProfileSelectionPanel : UserControl
         DisposeImages();
         _thumbnailLoaded.Clear();
         _thumbnailLoading.Clear();
+        _thumbnailRetryAfter.Clear();
 
         _items = items;
         _profile = profile;
@@ -146,6 +166,7 @@ public sealed class ProfileSelectionPanel : UserControl
         DisposeImages();
         _thumbnailLoaded.Clear();
         _thumbnailLoading.Clear();
+        _thumbnailRetryAfter.Clear();
         _items = Array.Empty<CollectionMediaItem>();
         _profile = null;
         _grid.Rows.Clear();
@@ -163,10 +184,10 @@ public sealed class ProfileSelectionPanel : UserControl
     {
         var hostHeight = FindForm()?.ClientSize.Height ?? Height;
         var targetHeight = compact
-            ? Math.Clamp((int)(hostHeight * 0.45), 330, 430)
+            ? Math.Clamp((int)(hostHeight * 0.52), 360, 480)
             : roomy
-                ? Math.Clamp((int)(hostHeight * 0.58), 560, 760)
-                : Math.Clamp((int)(hostHeight * 0.52), 440, 620);
+                ? Math.Clamp((int)(hostHeight * 0.68), 640, 840)
+                : Math.Clamp((int)(hostHeight * 0.56), 480, 680);
 
         if (Height != targetHeight)
             Height = targetHeight;
@@ -439,6 +460,11 @@ public sealed class ProfileSelectionPanel : UserControl
         };
         _grid.Scroll += (_, _) => ScheduleVisibleThumbnailLoad();
         _grid.Resize += (_, _) => ScheduleVisibleThumbnailLoad();
+        VisibleChanged += (_, _) =>
+        {
+            if (Visible && !_visualWorkPaused)
+                ScheduleVisibleThumbnailLoad();
+        };
         _grid.CellToolTipTextNeeded += (_, e) =>
         {
             if (e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count) return;
@@ -603,14 +629,14 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private void ScheduleVisibleThumbnailLoad()
     {
-        if (!Visible || _items.Count == 0 || _imageCts is null) return;
+        if (_visualWorkPaused || !Visible || _items.Count == 0 || _imageCts is null) return;
         _thumbnailTimer.Stop();
         _thumbnailTimer.Start();
     }
 
     private void QueueVisibleThumbnails(bool immediate = false)
     {
-        if (_imageCts is null || _imageCts.IsCancellationRequested || _grid.Rows.Count == 0 || !Visible)
+        if (_visualWorkPaused || _imageCts is null || _imageCts.IsCancellationRequested || _grid.Rows.Count == 0 || !Visible)
             return;
 
         int first;
@@ -625,7 +651,11 @@ public sealed class ProfileSelectionPanel : UserControl
 
         var ct = _imageCts.Token;
         for (var i = start; i <= end; i++)
+        {
+            if (i < 0 || i >= _grid.Rows.Count || !_grid.Rows[i].Visible)
+                continue;
             _ = LoadThumbnailForRowAsync(i, ct);
+        }
 
         var loaded = _thumbnailLoaded.Count;
         if (_items.Count > 0)
@@ -636,8 +666,9 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private async Task LoadThumbnailForRowAsync(int rowIndex, CancellationToken ct)
     {
-        if (rowIndex < 0 || rowIndex >= _items.Count) return;
+        if (_visualWorkPaused || rowIndex < 0 || rowIndex >= _items.Count) return;
         if (_thumbnailLoaded.ContainsKey(rowIndex)) return;
+        if (_thumbnailRetryAfter.TryGetValue(rowIndex, out var retryAt) && retryAt > DateTime.UtcNow) return;
         if (!_thumbnailLoading.TryAdd(rowIndex, 0)) return;
 
         try
@@ -660,7 +691,10 @@ public sealed class ProfileSelectionPanel : UserControl
                 }
 
                 if (image is null || ct.IsCancellationRequested)
+                {
+                    _thumbnailRetryAfter[rowIndex] = DateTime.UtcNow.AddSeconds(45);
                     return;
+                }
 
                 if (IsDisposed)
                 {
@@ -678,12 +712,16 @@ public sealed class ProfileSelectionPanel : UserControl
 
                     _loadedImages.Add(image);
                     _grid.Rows[rowIndex].Cells[1].Value = image;
+                    _thumbnailRetryAfter.TryRemove(rowIndex, out _);
                     _thumbnailLoaded.TryAdd(rowIndex, 0);
 
                     var loaded = _thumbnailLoaded.Count;
-                    _loading.Text = loaded >= _items.Count
-                        ? "Miniaturas prontas"
-                        : $"Miniaturas: {loaded:N0}/{_items.Count:N0} (priorizando o que está na tela)";
+                    if (loaded == _items.Count || loaded % 8 == 0)
+                    {
+                        _loading.Text = loaded >= _items.Count
+                            ? "Miniaturas prontas"
+                            : $"Miniaturas: {loaded:N0}/{_items.Count:N0} (priorizando o que está na tela)";
+                    }
                 }));
             }
             finally
@@ -709,20 +747,27 @@ public sealed class ProfileSelectionPanel : UserControl
         var isYouTube = item.Url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
                         item.Url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
 
+        // Primeiro tenta a URL fornecida pelo extrator: ela costuma ser a melhor
+        // opção disponível para Shorts e vídeos antigos. Se o formato não for
+        // suportado pelo System.Drawing, os JPGs oficiais entram como fallback.
+        if (!string.IsNullOrWhiteSpace(item.ThumbnailUrl))
+            candidates.Add(item.ThumbnailUrl);
+
         if (isYouTube && !string.IsNullOrWhiteSpace(item.Id))
         {
-            // JPGs oficiais do YouTube funcionam com System.Drawing e cobrem
-            // vídeos comuns e Shorts. A URL do extrator fica como último fallback.
-            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/maxresdefault.jpg");
-            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/sddefault.jpg");
-            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg");
-            candidates.Add($"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg");
-        }
-
-        if (!string.IsNullOrWhiteSpace(item.ThumbnailUrl) &&
-            !candidates.Contains(item.ThumbnailUrl, StringComparer.OrdinalIgnoreCase))
-        {
-            candidates.Add(item.ThumbnailUrl);
+            foreach (var suffix in new[]
+                     {
+                         "hqdefault.jpg",
+                         "mqdefault.jpg",
+                         "sddefault.jpg",
+                         "maxresdefault.jpg",
+                         "0.jpg"
+                     })
+            {
+                var url = $"https://i.ytimg.com/vi/{item.Id}/{suffix}";
+                if (!candidates.Contains(url, StringComparer.OrdinalIgnoreCase))
+                    candidates.Add(url);
+            }
         }
 
         return candidates;
@@ -734,16 +779,29 @@ public sealed class ProfileSelectionPanel : UserControl
         var image = await DownloadAndResizeAsync(_profile.AvatarUrl, 82, 82, ct).ConfigureAwait(false);
         if (image is null || ct.IsCancellationRequested || IsDisposed) return;
 
-        BeginInvoke(new Action(() =>
+        if (!IsHandleCreated)
         {
-            if (IsDisposed || ct.IsCancellationRequested)
+            image.Dispose();
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() =>
             {
-                image.Dispose();
-                return;
-            }
-            _loadedImages.Add(image);
-            _avatar.Image = image;
-        }));
+                if (IsDisposed || ct.IsCancellationRequested)
+                {
+                    image.Dispose();
+                    return;
+                }
+                _loadedImages.Add(image);
+                _avatar.Image = image;
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            image.Dispose();
+        }
     }
 
     private static async Task<Image?> DownloadAndResizeAsync(string url, int width, int height, CancellationToken ct)
@@ -832,6 +890,13 @@ public sealed class ProfileSelectionPanel : UserControl
 
     private static async Task<byte[]?> GetImageBytesAsync(string url, CancellationToken ct)
     {
+        if (FailedImageUntil.TryGetValue(url, out var failedUntil))
+        {
+            if (failedUntil > DateTime.UtcNow)
+                return null;
+            FailedImageUntil.TryRemove(url, out _);
+        }
+
         if (MemoryCache.TryGetValue(url, out var memory))
         {
             if (IsValidImageBytes(memory))
@@ -868,10 +933,21 @@ public sealed class ProfileSelectionPanel : UserControl
                 request.Headers.Referrer = new Uri("https://www.instagram.com/");
             }
             using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+            {
+                FailedImageUntil[url] = DateTime.UtcNow.AddMinutes(
+                    response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden ? 10 : 1);
+                return null;
+            }
 
             var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            if (bytes.Length == 0 || !IsValidImageBytes(bytes)) return null;
+            if (bytes.Length == 0 || !IsValidImageBytes(bytes))
+            {
+                FailedImageUntil[url] = DateTime.UtcNow.AddMinutes(2);
+                return null;
+            }
+
+            FailedImageUntil.TryRemove(url, out _);
 
             AddMemoryEntry(MemoryCache, url, bytes);
             try

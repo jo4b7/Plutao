@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.9
+
+- Revisão ampla de estabilidade e desempenho sobre a v0.5.8.
+- Redimensionamento da janela passa a ser agrupado, evitando relayout pesado a cada pixel.
+- Miniaturas são pausadas durante resize/transições e retomadas somente depois do layout estabilizar.
+- A área de resultados usa geometria mais previsível ao alternar entre janela normal e maximizada.
+- Análises de canal/perfil em andamento são canceladas imediatamente quando link, cookies, limite ou modo mudam.
+- URLs equivalentes passam a ser normalizadas ao reutilizar a seleção analisada.
+- O progresso inicial usa a quantidade real de URLs selecionadas.
+- Miniaturas do YouTube preservam a URL fornecida pelo yt-dlp antes dos fallbacks JPG.
+- Miniaturas com falha usam backoff para evitar milhares de requisições repetidas ao rolar listas grandes.
+- O carregamento de miniaturas reduz concorrência e atualizações de texto para aliviar a UI.
+- Prévia individual tenta várias miniaturas automaticamente antes de ocultar a imagem.
+- Atualização de yt-dlp, Deno e gallery-dl funciona com pasta temporária em outro disco.
+- Downloads ignorados pelo histórico deixam de ser reportados falsamente como arquivo final ausente.
+- Saída assíncrona do yt-dlp é drenada antes de validar o caminho final.
+- Conversão MP4 mantém backup do original e restaura automaticamente se a validação final falhar.
+- O diagnóstico passa a ter limite de tamanho para não degradar a interface em filas muito longas.
+- Atualizações de progresso são limitadas para reduzir flood na thread da interface.
+- Cache de coleções foi versionado novamente para não reaproveitar metadados/miniaturas antigos.
+- Processos de yt-dlp, gallery-dl e FFmpeg passam a liberar seus handles ao terminar ou cancelar.
+- Análise, download e atualização de componentes executam o trabalho pesado fora da thread da interface.
+- A lista de resultados recebe mais espaço vertical em janelas grandes.
+- Transições de listas enormes animam somente o contêiner leve, evitando redesenhar milhares de linhas por quadro.
+- Ao mudar um link durante download/atualização, a análise automática do novo link é retomada ao final da tarefa.
+- Cancelamento da prévia deixa de descartar o CancellationTokenSource enquanto a tarefa ainda está encerrando.
+- Callbacks de log, progresso, avatar e miniaturas são protegidos contra o fechamento da janela.
+- Abas ausentes do YouTube continuam sendo tratadas como normais, mas falhas reais de uma aba agora são reportadas.
+- Validação automatizada inclui smoke test do EXE e integração real com os canais usados para reproduzir os bugs.
+- User-Agent interno e versão do aplicativo atualizados para 0.5.9.
+
 ## 0.5.8
 
 - Corrige o layout ao alternar entre janela normal e maximizada.

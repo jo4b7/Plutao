@@ -24,6 +24,7 @@ public sealed class YtDlpRunner
     private string? _currentCompletedFilePath;
     private readonly ConcurrentQueue<string> _completedFilePaths = new();
     private volatile bool _currentRunHadErrors;
+    private volatile bool _currentRunSkippedByArchive;
     public string? LastCompletedFilePath { get; private set; }
     public ProfileInfo? LastAnalyzedProfile { get; private set; }
 
@@ -34,18 +35,59 @@ public sealed class YtDlpRunner
         public bool DownloadStarted { get; set; }
         public TimeSpan AnalysisDuration { get; set; }
         public TimeSpan? FormatSelectionStartedAt { get; set; }
+        public TimeSpan LastProgressReportAt { get; set; }
+        public int LastCollectionIndex { get; set; }
     }
 
     public YtDlpRunner(ToolManager tools) => _tools = tools;
 
-    public void Stop()
+    public void Stop() => TryStopProcess(_process);
+
+    private static void TryStopProcess(Process? process)
     {
         try
         {
-            if (_process is { HasExited: false })
-                _process.Kill(true);
+            if (process is { HasExited: false })
+                process.Kill(true);
         }
         catch { }
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunCapturedProcessAsync(
+        ProcessStartInfo startInfo,
+        CancellationToken ct)
+    {
+        using var process = new Process { StartInfo = startInfo };
+        _process = process;
+
+        try
+        {
+            process.Start();
+            using var reg = ct.Register(() => TryStopProcess(process));
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            return (process.ExitCode, stdout, stderr);
+        }
+        finally
+        {
+            if (ReferenceEquals(_process, process))
+                _process = null;
+
+            if (ct.IsCancellationRequested)
+            {
+                TryStopProcess(process);
+                try
+                {
+                    if (!process.HasExited)
+                        process.WaitForExit(1500);
+                }
+                catch { }
+            }
+        }
     }
 
     public async Task<MediaPreviewInfo?> AnalyzeMediaAsync(
@@ -113,19 +155,14 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
         progress.Report(new DownloadProgressInfo(0, 0, 20, "", "", "", "Obtendo informações"));
         var timer = Stopwatch.StartNew();
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
         timer.Stop();
 
-        if (_process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
         {
             var message = stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(message)
@@ -145,9 +182,9 @@ public sealed class YtDlpRunner
                       ?? string.Empty;
         var canonicalUrl = ReadString(root, "webpage_url") ?? url;
         var mediaId = ReadString(root, "id") ?? string.Empty;
-        var thumbnailUrl = IsYouTubeUrl(url) && !string.IsNullOrWhiteSpace(mediaId)
-            ? $"https://i.ytimg.com/vi/{mediaId}/hqdefault.jpg"
-            : ReadThumbnailUrl(root);
+        var thumbnailUrl = ReadThumbnailUrl(root);
+        if (string.IsNullOrWhiteSpace(thumbnailUrl) && IsYouTubeUrl(url) && !string.IsNullOrWhiteSpace(mediaId))
+            thumbnailUrl = $"https://i.ytimg.com/vi/{mediaId}/hqdefault.jpg";
         var availableHeights = ReadAvailableVideoHeights(root);
         var maximumResolution = ReadMaximumVideoResolution(root);
         var preview = new MediaPreviewInfo(
@@ -330,22 +367,17 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
         progress.Report(new DownloadProgressInfo(0, 0, 15, "", "", "", "Analisando página/conta"));
         log.Report($"[Análise] Lendo itens de: {url}");
 
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             log.Report("[Análise] " + AnsiRegex.Replace(line, string.Empty));
 
-        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
             throw new InvalidOperationException("Não foi possível listar os vídeos dessa página/conta. Confira o log e, se necessário, tente usar Cookies do navegador.");
 
         if (string.IsNullOrWhiteSpace(stdout))
@@ -639,37 +671,50 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
+        var missingTab = false;
+        string? lastMeaningfulError = null;
         if (!string.IsNullOrWhiteSpace(stderr))
         {
             foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var clean = AnsiRegex.Replace(line, string.Empty);
 
-                // "Não possui aba de Shorts/Lives" é um estado normal do canal,
-                // não um erro da análise. O resumo da categoria já mostrará 0 itens.
+                // Qualquer uma dessas abas pode não existir em um canal normal.
                 var missingOptionalTab =
+                    clean.Contains("does not have a videos tab", StringComparison.OrdinalIgnoreCase) ||
                     clean.Contains("does not have a shorts tab", StringComparison.OrdinalIgnoreCase) ||
                     clean.Contains("does not have a streams tab", StringComparison.OrdinalIgnoreCase) ||
                     clean.Contains("does not have a live tab", StringComparison.OrdinalIgnoreCase);
                 if (missingOptionalTab)
+                {
+                    missingTab = true;
                     continue;
+                }
 
                 if (!clean.Contains("Downloading", StringComparison.OrdinalIgnoreCase))
+                {
+                    lastMeaningfulError = clean;
                     log.Report($"[Análise/YouTube/{category}] {clean}");
+                }
             }
         }
 
         if (string.IsNullOrWhiteSpace(stdout))
+        {
+            if (run.ExitCode != 0 && !missingTab)
+            {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(lastMeaningfulError)
+                        ? $"Não foi possível analisar a aba {category} do canal."
+                        : lastMeaningfulError);
+            }
+
             return (Array.Empty<CollectionMediaItem>(), null);
+        }
 
         try
         {
@@ -694,9 +739,9 @@ public sealed class YtDlpRunner
                                 ?? (!string.IsNullOrWhiteSpace(id) ? id : $"Mídia {index}");
                     var rawUrl = ReadString(entry, "webpage_url") ?? ReadString(entry, "url") ?? string.Empty;
                     var itemUrl = NormalizeYouTubeMediaUrl(rawUrl, id);
-                    var thumbnailUrl = !string.IsNullOrWhiteSpace(id)
-                        ? $"https://i.ytimg.com/vi/{id}/hqdefault.jpg"
-                        : ReadThumbnailUrl(entry);
+                    var thumbnailUrl = ReadThumbnailUrl(entry);
+                    if (string.IsNullOrWhiteSpace(thumbnailUrl) && !string.IsNullOrWhiteSpace(id))
+                        thumbnailUrl = $"https://i.ytimg.com/vi/{id}/hqdefault.jpg";
 
                     items.Add(new CollectionMediaItem(
                         index,
@@ -855,11 +900,11 @@ public sealed class YtDlpRunner
             if (string.IsNullOrWhiteSpace(duration))
                 duration = item.Duration;
 
-            var thumbnail = !string.IsNullOrWhiteSpace(item.Id)
-                ? $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg"
-                : item.ThumbnailUrl;
+            var thumbnail = ReadThumbnailUrl(root);
             if (string.IsNullOrWhiteSpace(thumbnail))
-                thumbnail = ReadThumbnailUrl(root);
+                thumbnail = item.ThumbnailUrl;
+            if (string.IsNullOrWhiteSpace(thumbnail) && !string.IsNullOrWhiteSpace(item.Id))
+                thumbnail = $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg";
 
             var date = ReadMediaDate(root);
             if (string.IsNullOrWhiteSpace(date))
@@ -1032,19 +1077,14 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             log.Report("[Análise/Instagram] " + AnsiRegex.Replace(line, string.Empty));
 
-        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
             return string.Empty;
 
         return stdout;
@@ -1492,19 +1532,14 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi };
-        _process.Start();
-        using var reg = ct.Register(Stop);
-        var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-        var stderrTask = _process.StandardError.ReadToEndAsync();
-        await _process.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var run = await RunCapturedProcessAsync(psi, ct);
+        var stdout = run.Stdout;
+        var stderr = run.Stderr;
 
         foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             log.Report("[Análise/TikTok] " + AnsiRegex.Replace(line, string.Empty));
 
-        if (_process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
+        if (run.ExitCode != 0 && string.IsNullOrWhiteSpace(stdout))
             return string.Empty;
 
         return stdout;
@@ -2224,6 +2259,7 @@ public sealed class YtDlpRunner
         _currentCompletedFilePath = null;
         while (_completedFilePaths.TryDequeue(out _)) { }
         _currentRunHadErrors = false;
+        _currentRunSkippedByArchive = false;
         var timing = new RunTiming();
         var singleMedia = IsLikelySingleMediaUrl(url);
         if (singleMedia && options.AllowPlaylists)
@@ -2300,22 +2336,34 @@ public sealed class YtDlpRunner
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
-        _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
-        _process.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        using var downloadProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        downloadProcess.OutputDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        downloadProcess.ErrorDataReceived += (_, e) => HandleLine(e.Data, itemIndex, itemCount, log, progress, timing);
+        _process = downloadProcess;
 
         log.Report($"URL: {url}");
         progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 0, "", "", "", "Conectando à plataforma"));
         var processStartedUtc = DateTime.UtcNow;
-        _process.Start();
-        _process.BeginOutputReadLine();
-        _process.BeginErrorReadLine();
+        int exitCode;
+        try
+        {
+            downloadProcess.Start();
+            downloadProcess.BeginOutputReadLine();
+            downloadProcess.BeginErrorReadLine();
 
-        using var reg = ct.Register(Stop);
-        await _process.WaitForExitAsync(ct);
-        await Task.Delay(80, CancellationToken.None);
+            using var reg = ct.Register(() => TryStopProcess(downloadProcess));
+            await downloadProcess.WaitForExitAsync(ct);
+            // Garante que os handlers de OutputDataReceived/ErrorDataReceived
+            // drenaram as últimas linhas (inclusive PLUTAO_FILE) antes de validar.
+            downloadProcess.WaitForExit();
+            exitCode = downloadProcess.ExitCode;
+        }
+        finally
+        {
+            if (ReferenceEquals(_process, downloadProcess))
+                _process = null;
+        }
 
-        var exitCode = _process.ExitCode;
         if (!singleMedia && exitCode == 0 && _currentRunHadErrors)
             exitCode = 1;
         var processEndedAt = timing.Total.Elapsed;
@@ -2333,6 +2381,14 @@ public sealed class YtDlpRunner
                             ?? ResolveCompletedMediaPath(options, url, processStartedUtc, uniqueSuffix);
             if (string.IsNullOrWhiteSpace(completedPath) || !File.Exists(completedPath))
             {
+                if (options.UseArchive && _currentRunSkippedByArchive)
+                {
+                    timing.Total.Stop();
+                    log.Report("[Histórico] Item já estava registrado; nenhum novo arquivo foi criado.");
+                    progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Ignorado pelo histórico"));
+                    return 0;
+                }
+
                 log.Report("[Arquivo] ERRO: o yt-dlp terminou, mas o Plutao não conseguiu localizar o arquivo final.");
                 log.Report("[Arquivo] O download não será marcado como concluído sem validação do arquivo.");
                 return 2;
@@ -2473,7 +2529,6 @@ public sealed class YtDlpRunner
         void logResolvedPath(string path)
         {
             _currentCompletedFilePath = path;
-            LastCompletedFilePath = path;
         }
     }
 
@@ -2535,6 +2590,13 @@ public sealed class YtDlpRunner
         if (line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
             _currentRunHadErrors = true;
 
+        if (line.Contains("has already been recorded in the archive", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("has already been recorded in archive", StringComparison.OrdinalIgnoreCase))
+        {
+            _currentRunSkippedByArchive = true;
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Ignorado pelo histórico"));
+        }
+
         if (line.StartsWith(FilePrefix, StringComparison.Ordinal))
         {
             var path = line[FilePrefix.Length..].Trim().Trim('"');
@@ -2559,8 +2621,27 @@ public sealed class YtDlpRunner
             var collectionCount = ParsePositiveInt(parts.ElementAtOrDefault(4));
             var title = parts.ElementAtOrDefault(5)?.Trim() ?? string.Empty;
 
-            progress.Report(new DownloadProgressInfo(
-                itemIndex, itemCount, percent, speed, eta, title, "Baixando", collectionIndex, collectionCount));
+            var shouldReport = false;
+            lock (timing.SyncRoot)
+            {
+                var now = timing.Total.Elapsed;
+                shouldReport =
+                    percent >= 100 ||
+                    collectionIndex != timing.LastCollectionIndex ||
+                    now - timing.LastProgressReportAt >= TimeSpan.FromMilliseconds(100);
+
+                if (shouldReport)
+                {
+                    timing.LastProgressReportAt = now;
+                    timing.LastCollectionIndex = collectionIndex;
+                }
+            }
+
+            if (shouldReport)
+            {
+                progress.Report(new DownloadProgressInfo(
+                    itemIndex, itemCount, percent, speed, eta, title, "Baixando", collectionIndex, collectionCount));
+            }
             return;
         }
 
@@ -2968,6 +3049,9 @@ public sealed class YtDlpRunner
         var tempPath = Path.Combine(
             directory,
             $".{Path.GetFileNameWithoutExtension(path)}.plutao-compatible-{Guid.NewGuid():N}.mp4");
+        var backupPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(path)}.plutao-backup-{Guid.NewGuid():N}");
 
         async Task<(bool Success, string Error)> ConvertAsync(bool useAmdAmf)
         {
@@ -3060,17 +3144,9 @@ public sealed class YtDlpRunner
             psi.ArgumentList.Add("+faststart");
             psi.ArgumentList.Add(tempPath);
 
-            _process = new Process { StartInfo = psi };
-            _process.Start();
-            using var reg = ct.Register(Stop);
-            var stdoutTask = _process.StandardOutput.ReadToEndAsync();
-            var stderrTask = _process.StandardError.ReadToEndAsync();
-            await _process.WaitForExitAsync(ct);
-            _ = await stdoutTask;
-            var stderr = await stderrTask;
-
-            var success = _process.ExitCode == 0 && File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
-            return (success, stderr.Trim());
+            var run = await RunCapturedProcessAsync(psi, ct);
+            var success = run.ExitCode == 0 && File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
+            return (success, run.Stderr.Trim());
         }
 
         try
@@ -3121,31 +3197,63 @@ public sealed class YtDlpRunner
                 throw new InvalidOperationException(
                     $"Verificação do arquivo convertido falhou: vídeo={EmptyAsUnknown(tempVideoCodec)}, áudio={EmptyAsUnknown(tempAudioCodec)}.");
 
-            // O original só é substituído depois que o temporário passou no ffprobe.
-            File.Move(tempPath, path, true);
-
-            var finalVideoCodec = await ProbeCodecAsync(path, "v:0", ct);
-            var finalAudioCodec = await ProbeCodecAsync(path, "a:0", ct);
-            var (finalWidth, finalHeight) = await ProbeDimensionsAsync(path, ct);
-            var finalResolution = finalWidth > 0 && finalHeight > 0 ? Math.Min(finalWidth, finalHeight) : finalHeight;
-            var finalTargetHevc = (finalResolution > 0 ? finalResolution : effectiveHeight) > 1080;
-            var finalVideoOk = finalTargetHevc
-                ? string.Equals(finalVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
-                  string.Equals(finalVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
-                : string.Equals(finalVideoCodec, "h264", StringComparison.OrdinalIgnoreCase);
-            var finalAudioOk = string.IsNullOrWhiteSpace(finalAudioCodec) ||
-                               string.Equals(finalAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
-
-            if (!finalVideoOk || !finalAudioOk)
+            // O temporário já passou no ffprobe. Ainda assim, preserva o
+            // original até a validação do arquivo colocado no caminho final.
+            var backupCreated = false;
+            try
             {
-                LastCompletedFilePath = null;
-                throw new InvalidOperationException(
-                    $"Verificação final falhou: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}.");
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
+
+                File.Move(path, backupPath, false);
+                backupCreated = true;
+                File.Move(tempPath, path, false);
+
+                var finalVideoCodec = await ProbeCodecAsync(path, "v:0", ct);
+                var finalAudioCodec = await ProbeCodecAsync(path, "a:0", ct);
+                var (finalWidth, finalHeight) = await ProbeDimensionsAsync(path, ct);
+                var finalResolution = finalWidth > 0 && finalHeight > 0 ? Math.Min(finalWidth, finalHeight) : finalHeight;
+                var finalTargetHevc = (finalResolution > 0 ? finalResolution : effectiveHeight) > 1080;
+                var finalVideoOk = finalTargetHevc
+                    ? string.Equals(finalVideoCodec, "hevc", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(finalVideoCodec, "h265", StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(finalVideoCodec, "h264", StringComparison.OrdinalIgnoreCase);
+                var finalAudioOk = string.IsNullOrWhiteSpace(finalAudioCodec) ||
+                                   string.Equals(finalAudioCodec, "aac", StringComparison.OrdinalIgnoreCase);
+
+                if (!finalVideoOk || !finalAudioOk)
+                    throw new InvalidOperationException(
+                        $"Verificação final falhou: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}.");
+
+                _currentCompletedFilePath = path;
+                log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, resolução={(finalResolution > 0 ? finalResolution + "p" : "desconhecida")}.");
+
+                if (backupCreated && File.Exists(backupPath))
+                    File.Delete(backupPath);
+                backupCreated = false;
+            }
+            catch
+            {
+                if (backupCreated && File.Exists(backupPath))
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                            File.Delete(path);
+                        File.Move(backupPath, path, true);
+                        backupCreated = false;
+                    }
+                    catch (Exception restoreEx)
+                    {
+                        throw new InvalidOperationException(
+                            $"A conversão falhou e o Plutao não conseguiu restaurar automaticamente o arquivo original. Backup preservado em: {backupPath}",
+                            restoreEx);
+                    }
+                }
+
+                throw;
             }
 
-            _currentCompletedFilePath = path;
-            LastCompletedFilePath = path;
-            log.Report($"[Compatibilidade] Verificação final: vídeo={EmptyAsUnknown(finalVideoCodec)}, áudio={EmptyAsUnknown(finalAudioCodec)}, resolução={(finalResolution > 0 ? finalResolution + "p" : "desconhecida")}.");
             if (targetHevc && !videoCompatible)
                 log.Report(usedAmdAmf
                     ? "[Compatibilidade] HEVC codificado pela GPU AMD (AMF)."
@@ -3158,6 +3266,8 @@ public sealed class YtDlpRunner
             {
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
+                // Se ainda existir backup aqui, houve uma falha de restauração.
+                // Não apaga: é a última cópia segura do arquivo original.
             }
             catch { }
         }
