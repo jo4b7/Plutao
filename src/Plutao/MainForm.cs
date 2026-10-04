@@ -669,6 +669,7 @@ public sealed class MainForm : Form
         _drawerAnimating = true;
         _advancedVisible = visible;
         btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
+        profileSelection.SetVisualWorkPaused(true);
 
         try
         {
@@ -689,7 +690,7 @@ public sealed class MainForm : Form
             }
 
             var timer = Stopwatch.StartNew();
-            const double durationMs = 145d;
+            const double durationMs = 140d;
             while (timer.Elapsed.TotalMilliseconds < durationMs &&
                    !IsDisposed &&
                    generation == _drawerAnimationGeneration)
@@ -699,6 +700,7 @@ public sealed class MainForm : Form
                 var nextLeft = (int)Math.Round(startLeft + ((endLeft - startLeft) * eased));
                 if (settingsDrawer.Left != nextLeft)
                     settingsDrawer.Left = nextLeft;
+
                 await Task.Delay(16);
             }
 
@@ -712,7 +714,10 @@ public sealed class MainForm : Form
         finally
         {
             if (generation == _drawerAnimationGeneration)
+            {
                 _drawerAnimating = false;
+                profileSelection.SetVisualWorkPaused(false);
+            }
         }
     }
 
@@ -788,6 +793,8 @@ public sealed class MainForm : Form
 
         var generation = ++_workspaceAnimationGeneration;
         _workspaceAnimating = true;
+        profileSelection.SetVisualWorkPaused(true);
+
         try
         {
             var profileVisible = _resultsVisible && profileSelection.HasData;
@@ -798,20 +805,14 @@ public sealed class MainForm : Form
             profileSelection.Visible = profileVisible;
             grpLog.Visible = _logVisible;
 
-            // Com milhares de linhas, animar o DataGridView quadro a quadro custa caro.
-            // Nesses casos usa uma transição curta e aplica o layout final de uma vez.
-            var largeCollection = profileSelection.TotalItems > 800;
+            // DataGridView grande custa muito para relayout a cada quadro.
+            // Nesses casos aplicamos o estado final imediatamente, sem travadas.
+            var largeCollection = profileSelection.TotalItems > 300;
             if (largeCollection)
             {
+                profileWorkspace.Visible = shouldShow;
                 if (shouldShow)
-                {
-                    profileWorkspace.Visible = true;
                     profileWorkspace.Height = targetHeight;
-                }
-                else
-                {
-                    profileWorkspace.Visible = false;
-                }
 
                 ConfigureWorkspaceColumns(profileVisible);
                 profileWorkspace.PerformLayout();
@@ -825,7 +826,7 @@ public sealed class MainForm : Form
                 profileWorkspace.Visible = true;
 
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 135d;
+                const double durationMs = 125d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
                        generation == _workspaceAnimationGeneration)
@@ -843,7 +844,7 @@ public sealed class MainForm : Form
             {
                 var startHeight = Math.Max(1, profileWorkspace.Height);
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 120d;
+                const double durationMs = 115d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
                        generation == _workspaceAnimationGeneration)
@@ -885,7 +886,7 @@ public sealed class MainForm : Form
 
                 grpLog.Visible = _logVisible;
                 var timer = Stopwatch.StartNew();
-                const double durationMs = 130d;
+                const double durationMs = 120d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
                        generation == _workspaceAnimationGeneration)
@@ -907,7 +908,10 @@ public sealed class MainForm : Form
         finally
         {
             if (generation == _workspaceAnimationGeneration)
+            {
                 _workspaceAnimating = false;
+                profileSelection.SetVisualWorkPaused(false);
+            }
         }
     }
 
@@ -923,9 +927,6 @@ public sealed class MainForm : Form
             settingsDrawer.Visible = true;
             settingsDrawer.BringToFront();
         }
-
-        UpdateWorkspaceLayout();
-        PositionSettingsDrawer();
     }
 
     private int SettingsDrawerWidth()
