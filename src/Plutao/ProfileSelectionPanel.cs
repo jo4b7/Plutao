@@ -98,8 +98,11 @@ public sealed class ProfileSelectionPanel : UserControl
             return;
         }
 
-        if (Visible && _items.Count > 0 && !IsDisposed)
-            BeginInvoke(new Action(() => QueueVisibleThumbnails(immediate: false)));
+        if (Visible && _items.Count > 0 && !IsDisposed && IsHandleCreated)
+        {
+            try { BeginInvoke(new Action(() => QueueVisibleThumbnails(immediate: false))); }
+            catch (InvalidOperationException) { }
+        }
     }
 
     public IReadOnlyList<CollectionMediaItem> SelectedItems
@@ -776,16 +779,29 @@ public sealed class ProfileSelectionPanel : UserControl
         var image = await DownloadAndResizeAsync(_profile.AvatarUrl, 82, 82, ct).ConfigureAwait(false);
         if (image is null || ct.IsCancellationRequested || IsDisposed) return;
 
-        BeginInvoke(new Action(() =>
+        if (!IsHandleCreated)
         {
-            if (IsDisposed || ct.IsCancellationRequested)
+            image.Dispose();
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() =>
             {
-                image.Dispose();
-                return;
-            }
-            _loadedImages.Add(image);
-            _avatar.Image = image;
-        }));
+                if (IsDisposed || ct.IsCancellationRequested)
+                {
+                    image.Dispose();
+                    return;
+                }
+                _loadedImages.Add(image);
+                _avatar.Image = image;
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            image.Dispose();
+        }
     }
 
     private static async Task<Image?> DownloadAndResizeAsync(string url, int width, int height, CancellationToken ct)
