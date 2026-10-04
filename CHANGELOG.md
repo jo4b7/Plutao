@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.12
+
+- Troca entre Vídeos, Shorts e outras categorias passa a usar uma visão virtual da grade, sem esconder/mostrar milhares de linhas individualmente.
+- A seleção fica armazenada fora do DataGridView e é preservada ao alternar entre categorias.
+- Miniaturas da categoria anterior não bloqueiam a nova categoria; callbacks antigos são descartados por geração da visão.
+- O botão de resultados permanece disponível no cabeçalho enquanto existir uma análise carregada.
+- **Ocultar resultados** sempre pode ser revertido por **Mostrar resultados**, inclusive se uma animação anterior tiver sido interrompida.
+- Cliques durante transições cancelam o movimento anterior em vez de serem ignorados.
+- Animações da interface passam de cerca de 60 atualizações/s para alvo de cerca de 160–180 atualizações/s (6 ms por quadro), aproveitando melhor monitores de alta taxa de atualização quando o Windows conseguir acompanhar.
+- Versão e User-Agent internos atualizados para 0.5.12.
+
 ## 0.5.11
 
 - Corrige a lista de vídeos que podia ficar com apenas uma linha visível mesmo em tela maximizada.
