@@ -12,8 +12,7 @@ public sealed class FastDataGridView : DataGridView
         DoubleBuffered = true;
         SetStyle(
             ControlStyles.OptimizedDoubleBuffer |
-            ControlStyles.AllPaintingInWmPaint |
-            ControlStyles.UserPaint,
+            ControlStyles.AllPaintingInWmPaint,
             true);
         UpdateStyles();
     }
