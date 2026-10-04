@@ -3211,8 +3211,8 @@ public sealed class YtDlpRunner
             {
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
-                if (File.Exists(backupPath) && File.Exists(path))
-                    File.Delete(backupPath);
+                // Se ainda existir backup aqui, houve uma falha de restauração.
+                // Não apaga: é a última cópia segura do arquivo original.
             }
             catch { }
         }
