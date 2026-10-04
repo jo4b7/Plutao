@@ -97,7 +97,8 @@ public sealed class MainForm : Form
     private bool _resultsVisible;
     private bool _drawerAnimating;
     private bool _workspaceAnimating;
-    private int _animationGeneration;
+    private int _drawerAnimationGeneration;
+    private int _workspaceAnimationGeneration;
     private FormWindowState _lastWindowState = FormWindowState.Normal;
     private bool _busy;
 
@@ -663,7 +664,7 @@ public sealed class MainForm : Form
         if (_drawerAnimating || _advancedVisible == visible || IsDisposed)
             return;
 
-        var generation = ++_animationGeneration;
+        var generation = ++_drawerAnimationGeneration;
         _drawerAnimating = true;
         _advancedVisible = visible;
         btnAdvanced.Text = visible ? "Fechar configurações" : "Configurações";
@@ -690,7 +691,7 @@ public sealed class MainForm : Form
             const double durationMs = 145d;
             while (timer.Elapsed.TotalMilliseconds < durationMs &&
                    !IsDisposed &&
-                   generation == _animationGeneration)
+                   generation == _drawerAnimationGeneration)
             {
                 var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                 var eased = 1d - Math.Pow(1d - t, 3d);
@@ -700,7 +701,7 @@ public sealed class MainForm : Form
                 await Task.Delay(16);
             }
 
-            if (IsDisposed || generation != _animationGeneration)
+            if (IsDisposed || generation != _drawerAnimationGeneration)
                 return;
 
             settingsDrawer.Left = endLeft;
@@ -709,7 +710,7 @@ public sealed class MainForm : Form
         }
         finally
         {
-            if (generation == _animationGeneration)
+            if (generation == _drawerAnimationGeneration)
                 _drawerAnimating = false;
         }
     }
@@ -784,7 +785,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        var generation = ++_animationGeneration;
+        var generation = ++_workspaceAnimationGeneration;
         _workspaceAnimating = true;
         try
         {
@@ -826,7 +827,7 @@ public sealed class MainForm : Form
                 const double durationMs = 135d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
-                       generation == _animationGeneration)
+                       generation == _workspaceAnimationGeneration)
                 {
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = 1d - Math.Pow(1d - t, 3d);
@@ -834,7 +835,7 @@ public sealed class MainForm : Form
                     await Task.Delay(16);
                 }
 
-                if (!IsDisposed && generation == _animationGeneration)
+                if (!IsDisposed && generation == _workspaceAnimationGeneration)
                     profileWorkspace.Height = targetHeight;
             }
             else if (!shouldShow && wasVisible)
@@ -844,7 +845,7 @@ public sealed class MainForm : Form
                 const double durationMs = 120d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
-                       generation == _animationGeneration)
+                       generation == _workspaceAnimationGeneration)
                 {
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = t * t;
@@ -852,7 +853,7 @@ public sealed class MainForm : Form
                     await Task.Delay(16);
                 }
 
-                if (!IsDisposed && generation == _animationGeneration)
+                if (!IsDisposed && generation == _workspaceAnimationGeneration)
                 {
                     profileWorkspace.Visible = false;
                     profileWorkspace.Height = targetHeight;
@@ -886,7 +887,7 @@ public sealed class MainForm : Form
                 const double durationMs = 130d;
                 while (timer.Elapsed.TotalMilliseconds < durationMs &&
                        !IsDisposed &&
-                       generation == _animationGeneration)
+                       generation == _workspaceAnimationGeneration)
                 {
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = 1d - Math.Pow(1d - t, 3d);
@@ -899,19 +900,20 @@ public sealed class MainForm : Form
                 }
             }
 
-            if (!IsDisposed && generation == _animationGeneration)
+            if (!IsDisposed && generation == _workspaceAnimationGeneration)
                 UpdateWorkspaceLayout();
         }
         finally
         {
-            if (generation == _animationGeneration)
+            if (generation == _workspaceAnimationGeneration)
                 _workspaceAnimating = false;
         }
     }
 
     private void CancelUiAnimationsForResize()
     {
-        _animationGeneration++;
+        _drawerAnimationGeneration++;
+        _workspaceAnimationGeneration++;
         _drawerAnimating = false;
         _workspaceAnimating = false;
 
@@ -990,8 +992,22 @@ public sealed class MainForm : Form
         if (root is TableLayoutPanel layout)
         {
             layout.Padding = new Padding(compact ? 14 : 24, compact ? 12 : 18, compact ? 14 : 24, 24);
+
+            // AutoSize mantinha a largura preferida antiga em algumas trocas
+            // entre janela e maximizado. A largura mínima acompanha o host atual.
+            if (layout.Parent is Control host)
+            {
+                var availableWidth = Math.Max(1, host.ClientSize.Width -
+                    (host is System.Windows.Forms.Panel panel && panel.VerticalScroll.Visible
+                        ? SystemInformation.VerticalScrollBarWidth
+                        : 0));
+                layout.MinimumSize = new Size(availableWidth, 0);
+            }
+
             foreach (Control child in layout.Controls)
                 child.Margin = new Padding(0, 0, 0, compact ? 8 : 12);
+
+            layout.PerformLayout();
         }
     }
 
