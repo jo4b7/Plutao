@@ -99,6 +99,7 @@ public sealed class MainForm : Form
     private bool _resultsVisible;
     private bool _drawerAnimating;
     private bool _workspaceAnimating;
+    private int _workspaceTargetHeight = 520;
     private int _drawerAnimationGeneration;
     private int _workspaceAnimationGeneration;
     private FormWindowState _lastWindowState = FormWindowState.Normal;
@@ -190,7 +191,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.10",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.11",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -750,7 +751,7 @@ public sealed class MainForm : Form
         profileWorkspace.Visible = workspaceVisible;
 
         if (workspaceVisible)
-            profileWorkspace.Height = profileSelection.Height;
+            profileWorkspace.Height = Math.Max(1, _workspaceTargetHeight);
 
         ConfigureWorkspaceColumns(profileVisible);
         profileWorkspace.PerformLayout();
@@ -802,7 +803,7 @@ public sealed class MainForm : Form
             var profileVisible = _resultsVisible && profileSelection.HasData;
             var shouldShow = profileVisible || _logVisible;
             var wasVisible = profileWorkspace.Visible;
-            var targetHeight = Math.Max(1, profileSelection.Height);
+            var targetHeight = Math.Max(1, _workspaceTargetHeight);
 
             profileSelection.Visible = profileVisible;
             grpLog.Visible = _logVisible;
@@ -1037,23 +1038,13 @@ public sealed class MainForm : Form
         SetNamedHeight("linkCard", compact ? 130 : roomy ? 150 : 142);
         SetNamedHeight("previewCard", compact ? 124 : roomy ? 132 : 126);
         SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
-        profileSelection.ApplyResponsiveHeight(compact, roomy);
-        profileWorkspace.Height = profileSelection.Height;
-        profileWorkspace.Dock = DockStyle.Top;
-        profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        profileSelection.Dock = DockStyle.Fill;
-        grpLog.Dock = DockStyle.Fill;
-        UpdateWorkspaceLayout();
-        profileWorkspace.PerformLayout();
-        PositionSettingsDrawer();
 
         var root = Controls.Find("rootLayout", true).FirstOrDefault();
         if (root is TableLayoutPanel layout)
         {
             layout.Padding = new Padding(compact ? 14 : 24, compact ? 12 : 18, compact ? 14 : 24, 24);
 
-            // AutoSize mantinha a largura preferida antiga em algumas trocas
-            // entre janela e maximizado. A largura mínima acompanha o host atual.
+            // Mantém a raiz exatamente com a largura útil do viewport.
             if (layout.Parent is Control host)
             {
                 var availableWidth = Math.Max(1, host.ClientSize.Width -
@@ -1070,6 +1061,45 @@ public sealed class MainForm : Form
 
             layout.PerformLayout();
         }
+
+        // A altura do workspace não pode depender da altura atual do filho
+        // Dock=Fill. Fazê-lo criava um ciclo de encolhimento após maximize/restore.
+        _workspaceTargetHeight = CalculateWorkspaceTargetHeight(root as TableLayoutPanel, compact, roomy);
+
+        profileSelection.ApplyResponsiveHeight(compact, roomy);
+        profileWorkspace.Height = _workspaceTargetHeight;
+        profileWorkspace.Dock = DockStyle.Top;
+        profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        profileSelection.Dock = DockStyle.Fill;
+        grpLog.Dock = DockStyle.Fill;
+
+        UpdateWorkspaceLayout();
+        profileWorkspace.PerformLayout();
+        PositionSettingsDrawer();
+    }
+
+    private int CalculateWorkspaceTargetHeight(TableLayoutPanel? root, bool compact, bool roomy)
+    {
+        var fallback = compact ? 360 : roomy ? 560 : 460;
+        if (root?.Parent is not Control viewport || viewport.ClientSize.Height <= 0)
+            return fallback;
+
+        var occupied = root.Padding.Vertical;
+        foreach (Control child in root.Controls)
+        {
+            if (ReferenceEquals(child, profileWorkspace) || !child.Visible)
+                continue;
+
+            occupied += child.Height + child.Margin.Vertical;
+        }
+
+        // Deixa uma pequena folga para não ativar a barra vertical por 1–2 px
+        // devido a arredondamento/DPI.
+        var freeHeight = viewport.ClientSize.Height - occupied - 10;
+        var minHeight = compact ? 330 : roomy ? 460 : 400;
+        var maxHeight = compact ? 480 : roomy ? 760 : 660;
+
+        return Math.Clamp(Math.Max(freeHeight, minHeight), minHeight, maxHeight);
     }
 
     private void SetNamedHeight(string name, int height)
