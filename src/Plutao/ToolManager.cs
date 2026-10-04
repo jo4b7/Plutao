@@ -191,8 +191,12 @@ public sealed class ToolManager
 
             File.Copy(ffmpeg, ffmpegStaged, true);
             File.Copy(ffprobe, ffprobeStaged, true);
-            if (!IsUsableExecutable(ffmpegStaged) || !IsUsableExecutable(ffprobeStaged))
-                throw new InvalidOperationException("O pacote baixado contém executáveis FFmpeg inválidos.");
+            if (!IsUsableExecutable(ffmpegStaged) || !IsUsableExecutable(ffprobeStaged) ||
+                !CanRunExecutable(ffmpegStaged, "-version") ||
+                !CanRunExecutable(ffprobeStaged, "-version"))
+            {
+                throw new InvalidOperationException("O pacote baixado contém executáveis FFmpeg inválidos ou que não iniciam.");
+            }
 
             TryDeleteFile(ffmpegBackup);
             TryDeleteFile(ffprobeBackup);
@@ -337,6 +341,8 @@ public sealed class ToolManager
             File.Copy(sourcePath, staged, true);
             if (!IsUsableExecutable(staged))
                 throw new InvalidOperationException($"O arquivo baixado de {displayName} é inválido ou incompleto.");
+            if (!CanRunExecutable(staged, "--version"))
+                throw new InvalidOperationException($"O arquivo baixado de {displayName} não conseguiu iniciar corretamente.");
 
             File.Move(staged, destinationPath, true);
         }
@@ -381,7 +387,45 @@ public sealed class ToolManager
             ReportTransferProgress(stage, downloaded, totalBytes, sw.Elapsed, progress);
         }
 
+        if (totalBytes is > 0 && downloaded != totalBytes.Value)
+        {
+            throw new IOException(
+                $"Download incompleto: esperado {totalBytes.Value:N0} bytes, recebido {downloaded:N0} bytes.");
+        }
+
         ReportTransferProgress(stage, downloaded, totalBytes, sw.Elapsed, progress, forceComplete: true);
+    }
+
+    private static bool CanRunExecutable(string path, string versionArgument)
+    {
+        try
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+            process.StartInfo.ArgumentList.Add(versionArgument);
+            process.Start();
+
+            if (!process.WaitForExit(10_000))
+            {
+                try { process.Kill(true); } catch { }
+                return false;
+            }
+
+            return process.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void ReportTransferProgress(
