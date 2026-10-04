@@ -1509,15 +1509,21 @@ public sealed class MainForm : Form
 
         try
         {
-            var preview = await _runner.AnalyzeMediaAsync(
-                url,
-                cmbCookies.SelectedItem?.ToString() ?? "Nenhum",
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(info =>
-                {
-                    if (!string.IsNullOrWhiteSpace(info.Stage) && info.Percent < 100)
-                        lblPreviewMeta.Text = info.Stage + "...";
-                }),
+            var previewCookies = cmbCookies.SelectedItem?.ToString() ?? "Nenhum";
+            var previewLog = LogProgress();
+            var previewProgress = new Progress<DownloadProgressInfo>(info =>
+            {
+                if (!string.IsNullOrWhiteSpace(info.Stage) && info.Percent < 100)
+                    lblPreviewMeta.Text = info.Stage + "...";
+            });
+
+            var preview = await Task.Run(
+                () => _runner.AnalyzeMediaAsync(
+                    url,
+                    previewCookies,
+                    previewLog,
+                    previewProgress,
+                    ct),
                 ct);
 
             if (preview is null || ct.IsCancellationRequested || IsDisposed)
@@ -1917,13 +1923,18 @@ public sealed class MainForm : Form
 
         try
         {
-            var items = await _runner.AnalyzeCollectionAsync(
-                targetUrl,
-                analysisCookies,
-                analysisLimit,
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(SetProgressUi),
-                _cts.Token);
+            var analysisToken = _cts.Token;
+            var analysisLog = LogProgress();
+            var analysisProgress = new Progress<DownloadProgressInfo>(SetProgressUi);
+            var items = await Task.Run(
+                () => _runner.AnalyzeCollectionAsync(
+                    targetUrl,
+                    analysisCookies,
+                    analysisLimit,
+                    analysisLog,
+                    analysisProgress,
+                    analysisToken),
+                analysisToken);
 
             if (items.Count == 0)
             {
@@ -2091,12 +2102,17 @@ public sealed class MainForm : Form
 
         try
         {
-            var code = await _runner.DownloadAsync(
-                downloadUrls,
-                options,
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(SetProgressUi),
-                _cts.Token);
+            var downloadToken = _cts.Token;
+            var downloadLog = LogProgress();
+            var downloadProgress = new Progress<DownloadProgressInfo>(SetProgressUi);
+            var code = await Task.Run(
+                () => _runner.DownloadAsync(
+                    downloadUrls,
+                    options,
+                    downloadLog,
+                    downloadProgress,
+                    downloadToken),
+                downloadToken);
 
             if (code == 0)
             {
@@ -2220,10 +2236,12 @@ public sealed class MainForm : Form
             lblStatus.ForeColor = TextMuted;
             lblCurrent.Text = "Atualizando yt-dlp, FFmpeg, Deno e gallery-dl...";
             _cts = new CancellationTokenSource();
-            await _tools.UpdateAllAsync(
-                LogProgress(),
-                new Progress<DownloadProgressInfo>(SetProgressUi),
-                _cts.Token);
+            var updateToken = _cts.Token;
+            var updateLog = LogProgress();
+            var updateProgress = new Progress<DownloadProgressInfo>(SetProgressUi);
+            await Task.Run(
+                () => _tools.UpdateAllAsync(updateLog, updateProgress, updateToken),
+                updateToken);
             lblStatus.Text = "Componentes prontos";
             lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
             lblCurrent.Text = "yt-dlp, FFmpeg, Deno e gallery-dl estão prontos.";
