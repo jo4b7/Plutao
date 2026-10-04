@@ -954,15 +954,17 @@ public sealed class ProfileSelectionPanel : UserControl
             using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                FailedImageUntil[url] = DateTime.UtcNow.AddMinutes(
-                    response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden ? 10 : 1);
+                MarkImageFailure(
+                    url,
+                    TimeSpan.FromMinutes(
+                        response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden ? 10 : 1));
                 return null;
             }
 
             var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
             if (bytes.Length == 0 || !IsValidImageBytes(bytes))
             {
-                FailedImageUntil[url] = DateTime.UtcNow.AddMinutes(2);
+                MarkImageFailure(url, TimeSpan.FromMinutes(2));
                 return null;
             }
 
@@ -982,6 +984,26 @@ public sealed class ProfileSelectionPanel : UserControl
         {
             return null;
         }
+    }
+
+    private static void MarkImageFailure(string url, TimeSpan retryDelay)
+    {
+        FailedImageUntil[url] = DateTime.UtcNow.Add(retryDelay);
+        if (FailedImageUntil.Count <= 1024)
+            return;
+
+        var now = DateTime.UtcNow;
+        foreach (var pair in FailedImageUntil)
+        {
+            if (pair.Value <= now)
+                FailedImageUntil.TryRemove(pair.Key, out _);
+        }
+
+        if (FailedImageUntil.Count <= 1024)
+            return;
+
+        foreach (var key in FailedImageUntil.Keys.Take(FailedImageUntil.Count - 768))
+            FailedImageUntil.TryRemove(key, out _);
     }
 
     private static bool IsValidImageBytes(byte[] bytes)
