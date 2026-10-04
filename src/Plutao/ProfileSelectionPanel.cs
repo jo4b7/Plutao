@@ -181,10 +181,10 @@ public sealed class ProfileSelectionPanel : UserControl
     {
         var hostHeight = FindForm()?.ClientSize.Height ?? Height;
         var targetHeight = compact
-            ? Math.Clamp((int)(hostHeight * 0.45), 330, 430)
+            ? Math.Clamp((int)(hostHeight * 0.52), 360, 480)
             : roomy
-                ? Math.Clamp((int)(hostHeight * 0.58), 560, 760)
-                : Math.Clamp((int)(hostHeight * 0.52), 440, 620);
+                ? Math.Clamp((int)(hostHeight * 0.68), 640, 840)
+                : Math.Clamp((int)(hostHeight * 0.56), 480, 680);
 
         if (Height != targetHeight)
             Height = targetHeight;
