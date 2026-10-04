@@ -808,16 +808,71 @@ public sealed class MainForm : Form
             grpLog.Visible = _logVisible;
 
             // DataGridView grande custa muito para relayout a cada quadro.
-            // Nesses casos aplicamos o estado final imediatamente, sem travadas.
+            // Nesses casos a transição anima apenas o contêiner vazio e revela
+            // a grade no final: mantém movimento suave sem redesenhar 4 mil linhas.
             var largeCollection = profileSelection.TotalItems > 300;
             if (largeCollection)
             {
-                profileWorkspace.Visible = shouldShow;
-                if (shouldShow)
-                    profileWorkspace.Height = targetHeight;
+                if (shouldShow && !wasVisible)
+                {
+                    profileSelection.Visible = false;
+                    grpLog.Visible = false;
+                    ConfigureWorkspaceColumns(profileVisible);
+                    profileWorkspace.Height = 1;
+                    profileWorkspace.Visible = true;
 
-                ConfigureWorkspaceColumns(profileVisible);
-                profileWorkspace.PerformLayout();
+                    var timer = Stopwatch.StartNew();
+                    const double durationMs = 135d;
+                    while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                           !IsDisposed &&
+                           generation == _workspaceAnimationGeneration)
+                    {
+                        var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                        var eased = 1d - Math.Pow(1d - t, 3d);
+                        profileWorkspace.Height = Math.Max(1, (int)Math.Round(targetHeight * eased));
+                        await Task.Delay(16);
+                    }
+
+                    if (!IsDisposed && generation == _workspaceAnimationGeneration)
+                    {
+                        profileWorkspace.Height = targetHeight;
+                        profileSelection.Visible = profileVisible;
+                        grpLog.Visible = _logVisible;
+                        ConfigureWorkspaceColumns(profileVisible);
+                    }
+                }
+                else if (!shouldShow && wasVisible)
+                {
+                    profileSelection.Visible = false;
+                    grpLog.Visible = false;
+                    var startHeight = Math.Max(1, profileWorkspace.Height);
+                    var timer = Stopwatch.StartNew();
+                    const double durationMs = 110d;
+                    while (timer.Elapsed.TotalMilliseconds < durationMs &&
+                           !IsDisposed &&
+                           generation == _workspaceAnimationGeneration)
+                    {
+                        var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
+                        profileWorkspace.Height = Math.Max(1, (int)Math.Round(startHeight * (1d - (t * t))));
+                        await Task.Delay(16);
+                    }
+
+                    if (!IsDisposed && generation == _workspaceAnimationGeneration)
+                    {
+                        profileWorkspace.Visible = false;
+                        profileWorkspace.Height = targetHeight;
+                    }
+                }
+                else
+                {
+                    profileWorkspace.Visible = shouldShow;
+                    if (shouldShow)
+                        profileWorkspace.Height = targetHeight;
+                    profileSelection.Visible = profileVisible;
+                    grpLog.Visible = _logVisible;
+                    ConfigureWorkspaceColumns(profileVisible);
+                }
+
                 return;
             }
 
