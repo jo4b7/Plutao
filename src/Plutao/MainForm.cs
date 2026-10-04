@@ -100,6 +100,7 @@ public sealed class MainForm : Form
     private int _drawerAnimationGeneration;
     private int _workspaceAnimationGeneration;
     private FormWindowState _lastWindowState = FormWindowState.Normal;
+    private bool _analyzingCollection;
     private bool _busy;
 
     private static readonly Color Bg = Color.FromArgb(10, 10, 10);
@@ -187,7 +188,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.8",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.9",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -421,7 +422,7 @@ public sealed class MainForm : Form
         grpLog.Controls.Add(txtLog);
 
         profileWorkspace.Name = "profileWorkspace";
-        profileWorkspace.Dock = DockStyle.Fill;
+        profileWorkspace.Dock = DockStyle.Top;
         profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         profileWorkspace.AutoSize = false;
         profileWorkspace.Height = 520;
@@ -980,7 +981,7 @@ public sealed class MainForm : Form
         SetNamedHeight("progressCard", compact ? 84 : roomy ? 100 : 92);
         profileSelection.ApplyResponsiveHeight(compact, roomy);
         profileWorkspace.Height = profileSelection.Height;
-        profileWorkspace.Dock = DockStyle.Fill;
+        profileWorkspace.Dock = DockStyle.Top;
         profileWorkspace.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         profileSelection.Dock = DockStyle.Fill;
         grpLog.Dock = DockStyle.Fill;
@@ -1001,7 +1002,9 @@ public sealed class MainForm : Form
                     (host is System.Windows.Forms.Panel panel && panel.VerticalScroll.Visible
                         ? SystemInformation.VerticalScrollBarWidth
                         : 0));
+                layout.Width = availableWidth;
                 layout.MinimumSize = new Size(availableWidth, 0);
+                layout.MaximumSize = new Size(availableWidth, 0);
             }
 
             foreach (Control child in layout.Controls)
@@ -1109,6 +1112,7 @@ public sealed class MainForm : Form
         cmbVideoFormat.SelectedIndexChanged += (_, _) => UpdateModeUi();
         chkPlaylist.CheckedChanged += (_, _) =>
         {
+            CancelCollectionAnalysisForChangedInput();
             UpdateModeUi();
             if (!chkPlaylist.Checked)
             {
@@ -1121,11 +1125,13 @@ public sealed class MainForm : Form
         };
         cmbCollectionLimit.SelectedIndexChanged += (_, _) =>
         {
+            CancelCollectionAnalysisForChangedInput();
             ResetCollectionSelection();
             RestartPreviewAnalysis();
         };
         cmbCookies.SelectedIndexChanged += (_, _) =>
         {
+            CancelCollectionAnalysisForChangedInput();
             ResetCollectionSelection();
             RestartPreviewAnalysis();
         };
@@ -1241,6 +1247,7 @@ public sealed class MainForm : Form
         {
             _layoutTimer.Stop();
             ApplyResponsiveSpacing();
+            profileSelection.SetVisualWorkPaused(false);
         };
 
         Shown += (_, _) =>
@@ -1259,14 +1266,19 @@ public sealed class MainForm : Form
             if (WindowState == FormWindowState.Minimized)
                 return;
 
+            profileSelection.SetVisualWorkPaused(true);
             var stateChanged = WindowState != _lastWindowState;
             _lastWindowState = WindowState;
-            CancelUiAnimationsForResize();
 
             _layoutTimer.Stop();
             if (stateChanged)
             {
-                BeginInvoke(new Action(ApplyResponsiveSpacing));
+                CancelUiAnimationsForResize();
+                BeginInvoke(new Action(() =>
+                {
+                    ApplyResponsiveSpacing();
+                    profileSelection.SetVisualWorkPaused(false);
+                }));
             }
             else
             {
@@ -1278,6 +1290,7 @@ public sealed class MainForm : Form
             _layoutTimer.Stop();
             CancelUiAnimationsForResize();
             ApplyResponsiveSpacing();
+            profileSelection.SetVisualWorkPaused(false);
         };
         FormClosing += (_, _) =>
         {
@@ -1298,6 +1311,7 @@ public sealed class MainForm : Form
 
     private void OnUrlsChanged()
     {
+        CancelCollectionAnalysisForChangedInput();
         ResetCollectionSelection();
         ResetQualityChoices();
         CancelPreview();
@@ -1316,6 +1330,15 @@ public sealed class MainForm : Form
             _previewTimer.Start();
         else if (chkPlaylist.Checked && IsLikelyCollectionUrl(urls[0]))
             _previewTimer.Start();
+    }
+
+    private void CancelCollectionAnalysisForChangedInput()
+    {
+        if (!_analyzingCollection)
+            return;
+
+        try { _cts?.Cancel(); } catch { }
+        _runner.Stop();
     }
 
     private void CancelPreview()
@@ -1781,6 +1804,7 @@ public sealed class MainForm : Form
         await StopPreviewBeforeRunnerUseAsync();
         _tools.TemporaryDirectory = txtTemp.Text.Trim();
         _cts = new CancellationTokenSource();
+        _analyzingCollection = true;
         SetBusy(true);
         btnAnalyzeCollection.Visible = false;
         lblCollectionInfo.Visible = true;
@@ -1867,6 +1891,7 @@ public sealed class MainForm : Form
         }
         finally
         {
+            _analyzingCollection = false;
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
@@ -1885,7 +1910,11 @@ public sealed class MainForm : Form
         }
 
         var sameAnalyzedProfile = chkPlaylist.Checked && urls.Count == 1 &&
-                                  string.Equals(urls[0], _analyzedCollectionUrl, StringComparison.Ordinal) &&
+                                  !string.IsNullOrWhiteSpace(_analyzedCollectionUrl) &&
+                                  string.Equals(
+                                      AppCache.NormalizeUrl(urls[0]),
+                                      AppCache.NormalizeUrl(_analyzedCollectionUrl),
+                                      StringComparison.OrdinalIgnoreCase) &&
                                   profileSelection.HasData;
 
         if (sameAnalyzedProfile && profileSelection.SelectedItems.Count == 0)
@@ -1940,7 +1969,7 @@ public sealed class MainForm : Form
         _tools.TemporaryDirectory = options.TemporaryDirectory;
         _cts = new CancellationTokenSource();
         SetBusy(true);
-        SetProgressUi(new DownloadProgressInfo(0, urls.Count, 0, "", "", "", "Preparando"));
+        SetProgressUi(new DownloadProgressInfo(0, downloadUrls.Count, 0, "", "", "", "Preparando"));
         AppendLog($"Iniciando {downloadUrls.Count} link(s)...");
         if (downloadUrls.Count == 1 && YtDlpRunner.IsLikelySingleMediaUrl(downloadUrls[0]))
             AppendLog("Detecção automática: mídia individual; o modo de página/playlist será ignorado para acelerar o início.");
@@ -2088,7 +2117,7 @@ public sealed class MainForm : Form
             SetBusy(true);
             lblStatus.Text = "Atualizando...";
             lblStatus.ForeColor = TextMuted;
-            lblCurrent.Text = "Atualizando yt-dlp, FFmpeg e Deno...";
+            lblCurrent.Text = "Atualizando yt-dlp, FFmpeg, Deno e gallery-dl...";
             _cts = new CancellationTokenSource();
             await _tools.UpdateAllAsync(
                 LogProgress(),
@@ -2096,7 +2125,7 @@ public sealed class MainForm : Form
                 _cts.Token);
             lblStatus.Text = "Componentes prontos";
             lblStatus.ForeColor = Color.FromArgb(102, 220, 145);
-            lblCurrent.Text = "yt-dlp, FFmpeg e Deno estão prontos.";
+            lblCurrent.Text = "yt-dlp, FFmpeg, Deno e gallery-dl estão prontos.";
         }
         catch (OperationCanceledException)
         {
