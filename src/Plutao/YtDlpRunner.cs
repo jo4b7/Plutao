@@ -675,28 +675,46 @@ public sealed class YtDlpRunner
         var stdout = run.Stdout;
         var stderr = run.Stderr;
 
+        var missingTab = false;
+        string? lastMeaningfulError = null;
         if (!string.IsNullOrWhiteSpace(stderr))
         {
             foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var clean = AnsiRegex.Replace(line, string.Empty);
 
-                // "Não possui aba de Shorts/Lives" é um estado normal do canal,
-                // não um erro da análise. O resumo da categoria já mostrará 0 itens.
+                // Qualquer uma dessas abas pode não existir em um canal normal.
                 var missingOptionalTab =
+                    clean.Contains("does not have a videos tab", StringComparison.OrdinalIgnoreCase) ||
                     clean.Contains("does not have a shorts tab", StringComparison.OrdinalIgnoreCase) ||
                     clean.Contains("does not have a streams tab", StringComparison.OrdinalIgnoreCase) ||
                     clean.Contains("does not have a live tab", StringComparison.OrdinalIgnoreCase);
                 if (missingOptionalTab)
+                {
+                    missingTab = true;
                     continue;
+                }
 
                 if (!clean.Contains("Downloading", StringComparison.OrdinalIgnoreCase))
+                {
+                    lastMeaningfulError = clean;
                     log.Report($"[Análise/YouTube/{category}] {clean}");
+                }
             }
         }
 
         if (string.IsNullOrWhiteSpace(stdout))
+        {
+            if (run.ExitCode != 0 && !missingTab)
+            {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(lastMeaningfulError)
+                        ? $"Não foi possível analisar a aba {category} do canal."
+                        : lastMeaningfulError);
+            }
+
             return (Array.Empty<CollectionMediaItem>(), null);
+        }
 
         try
         {
