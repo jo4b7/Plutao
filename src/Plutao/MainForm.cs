@@ -191,7 +191,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.11",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.12",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
@@ -704,7 +704,7 @@ public sealed class MainForm : Form
                 if (settingsDrawer.Left != nextLeft)
                     settingsDrawer.Left = nextLeft;
 
-                await Task.Delay(16);
+                await Task.Delay(6);
             }
 
             if (IsDisposed || generation != _drawerAnimationGeneration)
@@ -741,10 +741,38 @@ public sealed class MainForm : Form
         await AnimateWorkspaceTransitionAsync();
     }
 
+    private async Task SetResultsVisibleAsync(bool visible)
+    {
+        if (!profileSelection.HasData)
+            return;
+
+        // Um segundo clique cancela a animação anterior em vez de ser ignorado.
+        // Isso evita ficar preso em "Ocultar resultados" sem conseguir voltar.
+        if (_workspaceAnimating)
+        {
+            _workspaceAnimationGeneration++;
+            _workspaceAnimating = false;
+            profileSelection.SetVisualWorkPaused(false);
+        }
+
+        _resultsVisible = visible;
+        btnToggleResults.Visible = true;
+        btnToggleResults.Text = visible ? "Ocultar resultados" : "Mostrar resultados";
+        await AnimateWorkspaceTransitionAsync();
+
+        // Garante o estado final mesmo se resize/DPI interromper a animação.
+        UpdateWorkspaceLayout();
+    }
+
     private void UpdateWorkspaceLayout()
     {
         var profileVisible = _resultsVisible && profileSelection.HasData;
         var workspaceVisible = profileVisible || _logVisible;
+
+        // O botão de resultados fica no cabeçalho, fora do painel que é ocultado.
+        // Enquanto houver dados analisados ele nunca desaparece.
+        btnToggleResults.Visible = profileSelection.HasData;
+        btnToggleResults.Text = _resultsVisible ? "Ocultar resultados" : "Mostrar resultados";
 
         profileSelection.Visible = profileVisible;
         grpLog.Visible = _logVisible;
@@ -831,7 +859,7 @@ public sealed class MainForm : Form
                         var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                         var eased = 1d - Math.Pow(1d - t, 3d);
                         profileWorkspace.Height = Math.Max(1, (int)Math.Round(targetHeight * eased));
-                        await Task.Delay(16);
+                        await Task.Delay(6);
                     }
 
                     if (!IsDisposed && generation == _workspaceAnimationGeneration)
@@ -855,7 +883,7 @@ public sealed class MainForm : Form
                     {
                         var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                         profileWorkspace.Height = Math.Max(1, (int)Math.Round(startHeight * (1d - (t * t))));
-                        await Task.Delay(16);
+                        await Task.Delay(6);
                     }
 
                     if (!IsDisposed && generation == _workspaceAnimationGeneration)
@@ -892,7 +920,7 @@ public sealed class MainForm : Form
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = 1d - Math.Pow(1d - t, 3d);
                     profileWorkspace.Height = Math.Max(1, (int)Math.Round(targetHeight * eased));
-                    await Task.Delay(16);
+                    await Task.Delay(6);
                 }
 
                 if (!IsDisposed && generation == _workspaceAnimationGeneration)
@@ -910,7 +938,7 @@ public sealed class MainForm : Form
                     var t = Math.Clamp(timer.Elapsed.TotalMilliseconds / durationMs, 0d, 1d);
                     var eased = t * t;
                     profileWorkspace.Height = Math.Max(1, (int)Math.Round(startHeight * (1d - eased)));
-                    await Task.Delay(16);
+                    await Task.Delay(6);
                 }
 
                 if (!IsDisposed && generation == _workspaceAnimationGeneration)
@@ -956,7 +984,7 @@ public sealed class MainForm : Form
                     profileWorkspace.ColumnStyles[0].Width = Math.Max(0, totalWidth - logWidth);
                     profileWorkspace.ColumnStyles[1].SizeType = SizeType.Absolute;
                     profileWorkspace.ColumnStyles[1].Width = Math.Max(0, logWidth);
-                    await Task.Delay(16);
+                    await Task.Delay(6);
                 }
             }
 
@@ -1254,20 +1282,14 @@ public sealed class MainForm : Form
         btnAnalyzeCollection.Click += async (_, _) => await AnalyzeCollectionAsync(automatic: false);
         profileSelection.SelectionChanged += (_, _) => ApplyProfileSelection();
         profileSelection.HideRequested += async (_, _) =>
-        {
-            _resultsVisible = false;
-            btnToggleResults.Visible = profileSelection.HasData;
-            btnToggleResults.Text = "Mostrar resultados";
-            await AnimateWorkspaceTransitionAsync();
-        };
+            await SetResultsVisibleAsync(false);
+
         btnToggleResults.Click += async (_, _) =>
         {
-            if (!profileSelection.HasData || _workspaceAnimating)
+            if (!profileSelection.HasData)
                 return;
 
-            _resultsVisible = !_resultsVisible;
-            btnToggleResults.Text = _resultsVisible ? "Ocultar resultados" : "Mostrar resultados";
-            await AnimateWorkspaceTransitionAsync();
+            await SetResultsVisibleAsync(!_resultsVisible);
         };
 
         btnBrowseVideo.Click += (_, _) =>
