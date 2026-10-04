@@ -1273,6 +1273,7 @@ public sealed class MainForm : Form
         {
             CancelUiAnimationsForResize();
             ApplyResponsiveSpacing();
+            profileSelection.SetVisualWorkPaused(false);
         }));
         Resize += (_, _) =>
         {
