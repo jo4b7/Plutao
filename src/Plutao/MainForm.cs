@@ -190,7 +190,7 @@ public sealed class MainForm : Form
         };
         var brandSub = new Label
         {
-            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.9",
+            Text = "Baixe vídeos, áudios, perfis e playlists  •  v0.5.10",
             AutoSize = true,
             ForeColor = TextMuted,
             Margin = new Padding(2, 0, 0, 0)
