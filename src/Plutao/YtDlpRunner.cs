@@ -653,6 +653,16 @@ public sealed class YtDlpRunner
             foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var clean = AnsiRegex.Replace(line, string.Empty);
+
+                // "Não possui aba de Shorts/Lives" é um estado normal do canal,
+                // não um erro da análise. O resumo da categoria já mostrará 0 itens.
+                var missingOptionalTab =
+                    clean.Contains("does not have a shorts tab", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("does not have a streams tab", StringComparison.OrdinalIgnoreCase) ||
+                    clean.Contains("does not have a live tab", StringComparison.OrdinalIgnoreCase);
+                if (missingOptionalTab)
+                    continue;
+
                 if (!clean.Contains("Downloading", StringComparison.OrdinalIgnoreCase))
                     log.Report($"[Análise/YouTube/{category}] {clean}");
             }
@@ -845,9 +855,11 @@ public sealed class YtDlpRunner
             if (string.IsNullOrWhiteSpace(duration))
                 duration = item.Duration;
 
-            var thumbnail = ReadThumbnailUrl(root);
+            var thumbnail = !string.IsNullOrWhiteSpace(item.Id)
+                ? $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg"
+                : item.ThumbnailUrl;
             if (string.IsNullOrWhiteSpace(thumbnail))
-                thumbnail = item.ThumbnailUrl;
+                thumbnail = ReadThumbnailUrl(root);
 
             var date = ReadMediaDate(root);
             if (string.IsNullOrWhiteSpace(date))
