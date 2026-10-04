@@ -24,6 +24,7 @@ public sealed class YtDlpRunner
     private string? _currentCompletedFilePath;
     private readonly ConcurrentQueue<string> _completedFilePaths = new();
     private volatile bool _currentRunHadErrors;
+    private volatile bool _currentRunSkippedByArchive;
     public string? LastCompletedFilePath { get; private set; }
     public ProfileInfo? LastAnalyzedProfile { get; private set; }
 
@@ -145,9 +146,9 @@ public sealed class YtDlpRunner
                       ?? string.Empty;
         var canonicalUrl = ReadString(root, "webpage_url") ?? url;
         var mediaId = ReadString(root, "id") ?? string.Empty;
-        var thumbnailUrl = IsYouTubeUrl(url) && !string.IsNullOrWhiteSpace(mediaId)
-            ? $"https://i.ytimg.com/vi/{mediaId}/hqdefault.jpg"
-            : ReadThumbnailUrl(root);
+        var thumbnailUrl = ReadThumbnailUrl(root);
+        if (string.IsNullOrWhiteSpace(thumbnailUrl) && IsYouTubeUrl(url) && !string.IsNullOrWhiteSpace(mediaId))
+            thumbnailUrl = $"https://i.ytimg.com/vi/{mediaId}/hqdefault.jpg";
         var availableHeights = ReadAvailableVideoHeights(root);
         var maximumResolution = ReadMaximumVideoResolution(root);
         var preview = new MediaPreviewInfo(
@@ -694,9 +695,9 @@ public sealed class YtDlpRunner
                                 ?? (!string.IsNullOrWhiteSpace(id) ? id : $"Mídia {index}");
                     var rawUrl = ReadString(entry, "webpage_url") ?? ReadString(entry, "url") ?? string.Empty;
                     var itemUrl = NormalizeYouTubeMediaUrl(rawUrl, id);
-                    var thumbnailUrl = !string.IsNullOrWhiteSpace(id)
-                        ? $"https://i.ytimg.com/vi/{id}/hqdefault.jpg"
-                        : ReadThumbnailUrl(entry);
+                    var thumbnailUrl = ReadThumbnailUrl(entry);
+                    if (string.IsNullOrWhiteSpace(thumbnailUrl) && !string.IsNullOrWhiteSpace(id))
+                        thumbnailUrl = $"https://i.ytimg.com/vi/{id}/hqdefault.jpg";
 
                     items.Add(new CollectionMediaItem(
                         index,
@@ -855,11 +856,11 @@ public sealed class YtDlpRunner
             if (string.IsNullOrWhiteSpace(duration))
                 duration = item.Duration;
 
-            var thumbnail = !string.IsNullOrWhiteSpace(item.Id)
-                ? $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg"
-                : item.ThumbnailUrl;
+            var thumbnail = ReadThumbnailUrl(root);
             if (string.IsNullOrWhiteSpace(thumbnail))
-                thumbnail = ReadThumbnailUrl(root);
+                thumbnail = item.ThumbnailUrl;
+            if (string.IsNullOrWhiteSpace(thumbnail) && !string.IsNullOrWhiteSpace(item.Id))
+                thumbnail = $"https://i.ytimg.com/vi/{item.Id}/hqdefault.jpg";
 
             var date = ReadMediaDate(root);
             if (string.IsNullOrWhiteSpace(date))
@@ -2224,6 +2225,7 @@ public sealed class YtDlpRunner
         _currentCompletedFilePath = null;
         while (_completedFilePaths.TryDequeue(out _)) { }
         _currentRunHadErrors = false;
+        _currentRunSkippedByArchive = false;
         var timing = new RunTiming();
         var singleMedia = IsLikelySingleMediaUrl(url);
         if (singleMedia && options.AllowPlaylists)
@@ -2313,7 +2315,9 @@ public sealed class YtDlpRunner
 
         using var reg = ct.Register(Stop);
         await _process.WaitForExitAsync(ct);
-        await Task.Delay(80, CancellationToken.None);
+        // Garante que os handlers de OutputDataReceived/ErrorDataReceived
+        // drenaram as últimas linhas (inclusive PLUTAO_FILE) antes de validar.
+        _process.WaitForExit();
 
         var exitCode = _process.ExitCode;
         if (!singleMedia && exitCode == 0 && _currentRunHadErrors)
@@ -2333,6 +2337,14 @@ public sealed class YtDlpRunner
                             ?? ResolveCompletedMediaPath(options, url, processStartedUtc, uniqueSuffix);
             if (string.IsNullOrWhiteSpace(completedPath) || !File.Exists(completedPath))
             {
+                if (options.UseArchive && _currentRunSkippedByArchive)
+                {
+                    timing.Total.Stop();
+                    log.Report("[Histórico] Item já estava registrado; nenhum novo arquivo foi criado.");
+                    progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Ignorado pelo histórico"));
+                    return 0;
+                }
+
                 log.Report("[Arquivo] ERRO: o yt-dlp terminou, mas o Plutao não conseguiu localizar o arquivo final.");
                 log.Report("[Arquivo] O download não será marcado como concluído sem validação do arquivo.");
                 return 2;
@@ -2473,7 +2485,6 @@ public sealed class YtDlpRunner
         void logResolvedPath(string path)
         {
             _currentCompletedFilePath = path;
-            LastCompletedFilePath = path;
         }
     }
 
@@ -2534,6 +2545,13 @@ public sealed class YtDlpRunner
         var line = AnsiRegex.Replace(rawLine, string.Empty).TrimEnd();
         if (line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
             _currentRunHadErrors = true;
+
+        if (line.Contains("has already been recorded in the archive", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("has already been recorded in archive", StringComparison.OrdinalIgnoreCase))
+        {
+            _currentRunSkippedByArchive = true;
+            progress.Report(new DownloadProgressInfo(itemIndex, itemCount, 100, "", "", "", "Ignorado pelo histórico"));
+        }
 
         if (line.StartsWith(FilePrefix, StringComparison.Ordinal))
         {
