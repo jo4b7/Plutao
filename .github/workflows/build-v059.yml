@@ -39,6 +39,19 @@ jobs:
             exit 1
           }
 
+      - name: Teste de inicializacao do EXE
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath .\publish\Plutao.exe -PassThru
+          Start-Sleep -Seconds 4
+          if ($process.HasExited) {
+            throw "Plutao.exe encerrou durante o teste de inicializacao. ExitCode=$($process.ExitCode)"
+          }
+
+          Stop-Process -Id $process.Id -Force
+          $process.WaitForExit()
+          Write-Host "Smoke test OK: o aplicativo permaneceu aberto."
+
       - name: Guardar artefato
         uses: actions/upload-artifact@v4
         with:
