@@ -85,6 +85,8 @@ public sealed class MainForm : Form
     private readonly Label lblAudioFormatCaption = new() { Text = "Formato", AutoSize = true };
     private readonly System.Windows.Forms.Timer _previewTimer = new() { Interval = 700 };
     private readonly System.Windows.Forms.Timer _layoutTimer = new() { Interval = 80 };
+    private readonly List<string> _previewThumbnailCandidates = new();
+    private int _previewThumbnailIndex;
     private CancellationTokenSource? _previewCts;
     private Task? _previewTask;
 
@@ -1237,11 +1239,21 @@ public sealed class MainForm : Form
         btnOpenLastFolder.Click += (_, _) => OpenLastFileFolder();
         picPreview.LoadCompleted += (_, e) =>
         {
-            if (e.Error is null)
+            if (e.Cancelled || e.Error is null)
                 return;
 
-            picPreview.ImageLocation = null;
-            picPreview.Visible = false;
+            var failedUrl = picPreview.ImageLocation ?? string.Empty;
+            if (_previewThumbnailIndex < _previewThumbnailCandidates.Count &&
+                !string.Equals(
+                    failedUrl,
+                    _previewThumbnailCandidates[_previewThumbnailIndex],
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _previewThumbnailIndex++;
+            StartNextPreviewThumbnail();
         };
 
         _layoutTimer.Tick += (_, _) =>
@@ -1345,6 +1357,9 @@ public sealed class MainForm : Form
     private void CancelPreview()
     {
         _previewTimer.Stop();
+        try { picPreview.CancelAsync(); } catch { }
+        _previewThumbnailCandidates.Clear();
+        _previewThumbnailIndex = 0;
         try { _previewCts?.Cancel(); } catch { }
         _previewCts?.Dispose();
         _previewCts = null;
@@ -1488,28 +1503,57 @@ public sealed class MainForm : Form
         lblPreviewDetails.Text = string.Join("  •  ", details);
         ApplyAvailableQualities(preview);
 
-        var thumbnailUrl = preview.ThumbnailUrl;
+        try { picPreview.CancelAsync(); } catch { }
+        _previewThumbnailCandidates.Clear();
+        _previewThumbnailIndex = 0;
+
+        void AddCandidate(string? candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                return;
+            if (!_previewThumbnailCandidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                _previewThumbnailCandidates.Add(candidate);
+        }
+
+        AddCandidate(preview.ThumbnailUrl);
         if (preview.Platform.Equals("YouTube", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(preview.Id))
         {
-            thumbnailUrl = $"https://i.ytimg.com/vi/{preview.Id}/hqdefault.jpg";
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/hqdefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/mqdefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/sddefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/maxresdefault.jpg");
+            AddCandidate($"https://i.ytimg.com/vi/{preview.Id}/0.jpg");
         }
 
-        if (!string.IsNullOrWhiteSpace(thumbnailUrl))
+        StartNextPreviewThumbnail();
+    }
+
+    private void StartNextPreviewThumbnail()
+    {
+        if (IsDisposed)
+            return;
+
+        if (_previewThumbnailIndex < 0 ||
+            _previewThumbnailIndex >= _previewThumbnailCandidates.Count)
         {
-            try
-            {
-                picPreview.ErrorImage = null;
-                picPreview.InitialImage = null;
-                picPreview.Visible = true;
-                picPreview.ImageLocation = thumbnailUrl;
-                picPreview.LoadAsync();
-            }
-            catch
-            {
-                picPreview.ImageLocation = null;
-                picPreview.Visible = false;
-            }
+            picPreview.ImageLocation = null;
+            picPreview.Visible = false;
+            return;
+        }
+
+        try
+        {
+            picPreview.ErrorImage = null;
+            picPreview.InitialImage = null;
+            picPreview.Visible = true;
+            picPreview.ImageLocation = _previewThumbnailCandidates[_previewThumbnailIndex];
+            picPreview.LoadAsync();
+        }
+        catch
+        {
+            _previewThumbnailIndex++;
+            StartNextPreviewThumbnail();
         }
     }
 
