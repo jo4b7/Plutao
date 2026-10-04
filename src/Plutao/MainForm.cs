@@ -2155,6 +2155,7 @@ public sealed class MainForm : Form
             _cts?.Dispose();
             _cts = null;
             _activeOutputDirectory = null;
+            RestartPreviewAnalysis();
         }
     }
 
@@ -2265,6 +2266,7 @@ public sealed class MainForm : Form
             SetBusy(false);
             _cts?.Dispose();
             _cts = null;
+            RestartPreviewAnalysis();
         }
     }
 
