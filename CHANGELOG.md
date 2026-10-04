@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.8
+
+- Corrige o layout ao alternar entre janela normal e maximizada.
+- A área de resultados volta a ocupar toda a largura disponível quando o Diagnóstico está fechado.
+- Redimensionamentos são agrupados para evitar recalcular a interface a cada pixel durante maximize/restore.
+- Canais com milhares de vídeos deixam de redimensionar todas as linhas da grade durante mudanças de janela.
+- Transições de Configurações, Diagnóstico e resultados ficam mais curtas e leves.
+- Em coleções grandes, a interface evita animações quadro a quadro sobre o DataGridView para não engasgar.
+- Miniaturas de Shorts tentam múltiplos fallbacks JPG do YouTube antes de desistir.
+- Falhas temporárias de miniatura deixam de ser marcadas como concluídas, permitindo nova tentativa ao voltar à área visível.
+- Mensagens de canal sem aba de Shorts/Lives deixam de aparecer como ERROR no Diagnóstico.
+- User-Agent interno e versão do aplicativo atualizados para 0.5.8.
+
 ## 0.5.7
 
 - Corrige a área de resultados que podia permanecer oculta mesmo depois de um canal ser analisado com sucesso.
