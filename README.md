@@ -2,9 +2,11 @@
 
 Plutao é um downloader universal para Windows baseado em **yt-dlp + FFmpeg**, com suporte a vídeo, áudio, páginas, canais, perfis e playlists.
 
-## v0.5.11 — espaço vertical adaptativo
+## v0.5.12 — categorias virtuais e interface de alta fluidez
 
 A tela principal mantém o fluxo simples: **colar o link → escolher Vídeo/Áudio → qualidade/formato → BAIXAR**.
+
+A v0.5.12 torna a troca entre **Vídeos** e **Shorts** independente do número total de mídias: a grade usa uma visão virtual da categoria ativa e preserva a seleção global. As transições também usam intervalos de quadro menores para ficar mais suaves em monitores de alta taxa de atualização.
 
 A v0.5.10 reduz o uso de memória em canais muito grandes: miniaturas fora da área próxima da tela são liberadas e recarregadas sob demanda. Filtros de categoria e ações de selecionar/limpar milhares de itens também suspendem o redesenho da grade durante a operação para evitar cintilação e travamentos.
 
@@ -18,7 +20,7 @@ As **Configurações** ficam em uma gaveta lateral que pode ser aberta mesmo dur
 
 A v0.5.9 faz uma revisão de estabilidade em cima da v0.5.8: redimensionamento e transições deixam de disputar recursos com miniaturas, análises antigas são canceladas quando o link/configuração muda, filas grandes enviam menos atualizações à interface, miniaturas ganham novas tentativas controladas e a atualização de componentes funciona mesmo quando a pasta temporária fica em outro disco.
 
-A v0.5.11 mantém as melhorias anteriores em cache, validação final, progresso e geometria: qualidades reais por vídeo, canais do YouTube separados em Vídeos/Shorts/Lives, metadados complementares do Instagram e o analisador alternativo de perfis do TikTok quando o yt-dlp falha ao obter o `secUid`.
+A v0.5.12 mantém as melhorias anteriores em cache, validação final, progresso e geometria: qualidades reais por vídeo, canais do YouTube separados em Vídeos/Shorts/Lives, metadados complementares do Instagram e o analisador alternativo de perfis do TikTok quando o yt-dlp falha ao obter o `secUid`.
 
 - prévia automática para links individuais;
 - análise automática para perfis/canais/páginas;
